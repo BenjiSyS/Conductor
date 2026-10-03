@@ -1,0 +1,11 @@
+target/
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/gen/schemas/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+/data/
+portable.flag

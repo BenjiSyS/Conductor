@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "description": "Main local window. Only bundled app content receives native permissions; previews of local dev servers run in sandboxed frames without IPC.",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-open", "updater:default", "process:allow-restart"]
+}

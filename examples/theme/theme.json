@@ -1,0 +1,8 @@
+{
+  "name": "Forest",
+  "version": "1.0.0",
+  "author": "Conductor contributors",
+  "description": "A minimal theme template with calm green accents",
+  "light": { "accent": "#285846", "focus": "#285846" },
+  "dark": { "accent": "#a8cbb8", "focus": "#a8cbb8" }
+}

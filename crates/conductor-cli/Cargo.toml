@@ -1,0 +1,30 @@
+[package]
+name = "conductor-cli"
+description = "Headless Conductor: Goals, context inspection, MCP, skills, checkpoints, Environment Doctor and Conductor Host from the terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "conductor"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+clap = { version = "4", features = ["derive"] }
+conductor-context.workspace = true
+conductor-core.workspace = true
+conductor-engine.workspace = true
+conductor-orchestrator.workspace = true
+conductor-remote.workspace = true
+conductor-security.workspace = true
+conductor-tools.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tokio-util.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

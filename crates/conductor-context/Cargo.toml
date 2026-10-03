@@ -1,0 +1,21 @@
+[package]
+name = "conductor-context"
+description = "Repository index, Smart Context Cache, context compression, log reduction and handoff packets for Conductor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conductor-security.workspace = true
+hex.workspace = true
+ignore.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
