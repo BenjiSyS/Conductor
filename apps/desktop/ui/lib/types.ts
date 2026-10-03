@@ -41,6 +41,7 @@ export interface Prefs {
   remote_port: number;
   remote_continue_on_disconnect: boolean;
   emergency_shortcut: string;
+  subscription_signin: boolean;
   seen_resume: Record<string, number>;
 }
 
@@ -406,3 +407,39 @@ export const defaultSettings: Settings = {
   allow_highest_effort: false,
   last_project: null,
 };
+
+export interface RateWindow {
+  limit: number | null;
+  remaining: number | null;
+  reset: string | null;
+}
+export interface UsageOverview {
+  providers: {
+    id: string;
+    name: string;
+    kind: ProviderKind;
+    enabled: boolean;
+    limits: {
+      requests: RateWindow;
+      tokens: RateWindow;
+      input_tokens: RateWindow;
+      output_tokens: RateWindow;
+      observed_at: number;
+    } | null;
+    session: { input: number; output: number; requests: number };
+  }[];
+  subscriptions_enabled: boolean;
+  subscriptions: {
+    service: 'claude' | 'chatgpt' | 'gemini';
+    label: string;
+    signed_in: boolean;
+    account: string | null;
+    plan: string | null;
+  }[];
+}
+export interface SubscriptionUsage {
+  service: 'claude' | 'chatgpt' | 'gemini';
+  account: string | null;
+  plan: string | null;
+  windows: { label: string; used_percent: number; resets_at: string | null; resets_at_unix: number | null }[];
+}

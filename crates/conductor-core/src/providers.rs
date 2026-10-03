@@ -630,6 +630,8 @@ pub async fn stream(
         key,
     );
     let response = tokio::select! {result=request.send()=>result?,_ = cancel.cancelled()=>return Err(Error::Cancelled)};
+    // Rate-limit headers arrive on errors (429) as well as successes.
+    crate::limits::observe(&config.id, &config.kind, response.headers());
     if !response.status().is_success() {
         return Err(status_error(response.status().as_u16()));
     }
@@ -1185,6 +1187,32 @@ mod tests {
             request_body(&config, &request),
             Err(Error::Approval(_))
         ));
+    }
+    #[tokio::test]
+    async fn records_rate_limit_headers_even_on_429() -> Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("x-ratelimit-limit-requests", "60")
+                    .insert_header("x-ratelimit-remaining-requests", "0")
+                    .insert_header("x-ratelimit-reset-requests", "20s"),
+            )
+            .mount(&server)
+            .await;
+        let mut config = custom(format!("{}/v1", server.uri()));
+        config.id = "limits-429".into();
+        let result = stream(&config, "k", &request(), CancellationToken::new(), |_| {
+            Ok(())
+        })
+        .await;
+        assert!(matches!(result, Err(Error::Provider { status: 429, .. })));
+        let limits = crate::limits::get("limits-429").expect("limits recorded");
+        assert_eq!(limits.requests.limit, Some(60));
+        assert_eq!(limits.requests.remaining, Some(0));
+        assert_eq!(limits.requests.reset.as_deref(), Some("20s"));
+        Ok(())
     }
     #[tokio::test]
     async fn streams_real_http_fixture_with_auth_and_usage() -> Result<()> {

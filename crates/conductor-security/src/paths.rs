@@ -267,8 +267,14 @@ mod tests {
             Err(PathError::Reserved(_))
         ));
         assert!(g.resolve_write("src/a.rs:stream").is_err());
-        assert!(g.resolve_write(".git./config").is_err(), "trailing-dot alias");
-        assert!(g.resolve_write(".git /config").is_err(), "trailing-space alias");
+        assert!(
+            g.resolve_write(".git./config").is_err(),
+            "trailing-dot alias"
+        );
+        assert!(
+            g.resolve_write(".git /config").is_err(),
+            "trailing-space alias"
+        );
         assert!(g.resolve_write("notes.").is_err());
     }
 

@@ -21,7 +21,14 @@ function reply(body) {
   if (last.includes('Ask zero questions if the task is clear')) {
     return JSON.stringify({
       questions: [
-        { id: 'q1', text: 'Which platforms matter?', priority: 'blocking', options: ['Windows', 'Web'], default: 'Windows', topic: 'platforms' },
+        {
+          id: 'q1',
+          text: 'Which platforms matter?',
+          priority: 'blocking',
+          options: ['Windows', 'Web'],
+          default: 'Windows',
+          topic: 'platforms',
+        },
         { id: 'q2', text: 'May I run the tests?', priority: 'blocking', options: [], topic: '' },
       ],
     });
@@ -35,7 +42,10 @@ function reply(body) {
   }
   if (last.includes('Reply PASS or FAIL')) return 'PASS\nThe work meets the criterion.';
   if (last.includes('Independently review')) return 'APPROVE — the change is small and correct.';
-  if (last.startsWith('Tool results:')) return all.includes('long command') ? '<done>Finished the long command.</done>' : '<done>Created greeting.txt and confirmed Git is available.</done>';
+  if (last.startsWith('Tool results:'))
+    return all.includes('long command')
+      ? '<done>Finished the long command.</done>'
+      : '<done>Created greeting.txt and confirmed Git is available.</done>';
   if (system.includes('You can use tools') && all.includes('long command')) {
     return process.platform === 'win32' ? '<run>ping -n 40 127.0.0.1</run>' : '<run>sleep 40</run>';
   }
@@ -75,14 +85,33 @@ const server = http.createServer((req, res) => {
       const text = reply(body);
       const sys = (body.messages ?? []).find((m) => m.role === 'system')?.content ?? '';
       const slow = JSON.stringify(body).includes('SLOW');
-      log.push({ model: body.model, effort: body.reasoning_effort ?? null, auth: auth ? 'present' : 'none', chars: data.length, caveman: sys.includes('# Response style'), reply: text.slice(0, 60) });
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      log.push({
+        model: body.model,
+        effort: body.reasoning_effort ?? null,
+        auth: auth ? 'present' : 'none',
+        chars: data.length,
+        caveman: sys.includes('# Response style'),
+        reply: text.slice(0, 60),
+      });
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        // Same rate-limit headers OpenAI sends.
+        'x-ratelimit-limit-requests': '500',
+        'x-ratelimit-remaining-requests': String(500 - log.length),
+        'x-ratelimit-reset-requests': '120ms',
+        'x-ratelimit-limit-tokens': '30000',
+        'x-ratelimit-remaining-tokens': '29500',
+        'x-ratelimit-reset-tokens': '1s',
+      });
       // Stream in small chunks like a real provider.
       for (let i = 0; i < text.length; i += 24) {
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text.slice(i, i + 24) } }] })}\n\n`);
         await new Promise((r) => setTimeout(r, slow ? 350 : 15));
       }
-      res.write(`data: ${JSON.stringify({ usage: { prompt_tokens: Math.round(data.length / 4), completion_tokens: Math.round(text.length / 4) } })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({ usage: { prompt_tokens: Math.round(data.length / 4), completion_tokens: Math.round(text.length / 4) } })}\n\n`,
+      );
       res.write('data: [DONE]\n\n');
       res.end();
       return;

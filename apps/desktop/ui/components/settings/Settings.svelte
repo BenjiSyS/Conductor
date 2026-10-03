@@ -3,6 +3,7 @@
   import { app, type SettingsTab } from '../../lib/app.svelte';
   import General from './General.svelte';
   import Providers from './Providers.svelte';
+  import Usage from './Usage.svelte';
   import Combos from './Combos.svelte';
   import Permissions from './Permissions.svelte';
   import Optimization from './Optimization.svelte';
@@ -20,6 +21,7 @@
     { id: 'appearance', label: 'Appearance', group: 'App' },
     { id: 'updates', label: 'Updates', group: 'App' },
     { id: 'providers', label: 'Providers', group: 'Models' },
+    { id: 'usage', label: 'Usage', group: 'Models' },
     { id: 'combos', label: 'Combos', group: 'Models' },
     { id: 'instructions', label: 'Instructions', group: 'Models' },
     { id: 'permissions', label: 'Permissions', group: 'Safety' },
@@ -57,6 +59,7 @@
       <button class="btn ghost icon close" onclick={close} aria-label="Close settings"><X size={16} /></button>
       {#if app.settingsTab === 'general'}<General />
       {:else if app.settingsTab === 'providers'}<Providers />
+      {:else if app.settingsTab === 'usage'}<Usage />
       {:else if app.settingsTab === 'combos'}<Combos />
       {:else if app.settingsTab === 'permissions'}<Permissions />
       {:else if app.settingsTab === 'optimization'}<Optimization />

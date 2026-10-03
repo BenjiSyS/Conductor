@@ -21,6 +21,7 @@ pub mod goals;
 pub mod memory;
 pub mod paths;
 pub mod profiles;
+pub mod subscriptions;
 pub mod toolbox;
 pub mod verifier;
 

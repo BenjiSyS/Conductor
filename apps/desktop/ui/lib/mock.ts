@@ -49,6 +49,7 @@ const prefsDefault: Prefs = {
   remote_port: 47820,
   remote_continue_on_disconnect: true,
   emergency_shortcut: 'CmdOrCtrl+Alt+Shift+X',
+  subscription_signin: false,
   seen_resume: {},
 };
 
@@ -64,6 +65,7 @@ const db = {
   goals: [] as GoalRecord[],
   mcp: [] as { name: string; enabled: boolean; source: string; transport: unknown; description: string }[],
   host: false,
+  subscriptions: {} as Record<string, { account: string | null; plan: string | null }>,
 };
 
 function profiles(): ModelProfile[] {
@@ -429,6 +431,89 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
   disconnect_provider: (a) => {
     const p = db.providers.find((x) => x.id === a.id);
     if (p) p.enabled = false;
+  },
+  usage_overview: () => {
+    const win = (limit: number, remaining: number, reset: string) => ({ limit, remaining, reset });
+    const none = { limit: null, remaining: null, reset: null };
+    const on = !!db.prefs.subscription_signin;
+    return {
+      providers: db.providers.map((p) => ({
+        id: p.id,
+        name: p.name,
+        kind: p.kind,
+        enabled: p.enabled,
+        limits:
+          p.kind === 'openai'
+            ? {
+                requests: win(500, 487, '7.2s'),
+                tokens: win(30000, 21400, '17s'),
+                input_tokens: none,
+                output_tokens: none,
+                observed_at: 0,
+              }
+            : p.kind === 'anthropic'
+              ? {
+                  requests: win(50, 46, new Date(Date.now() + 40_000).toISOString()),
+                  tokens: none,
+                  input_tokens: win(40000, 12000, new Date(Date.now() + 40_000).toISOString()),
+                  output_tokens: win(8000, 7400, new Date(Date.now() + 40_000).toISOString()),
+                  observed_at: 0,
+                }
+              : null,
+        session: { input: 1840, output: 620, requests: 3 },
+      })),
+      subscriptions_enabled: on,
+      subscriptions: (['claude', 'chatgpt', 'gemini'] as const).map((service) => ({
+        service,
+        label: { claude: 'Claude', chatgpt: 'ChatGPT', gemini: 'Gemini' }[service],
+        signed_in: on && service in db.subscriptions,
+        account: on ? (db.subscriptions[service]?.account ?? null) : null,
+        plan: on ? (db.subscriptions[service]?.plan ?? null) : null,
+      })),
+    };
+  },
+  subscription_sign_in: async (a) => {
+    if (!db.prefs.subscription_signin)
+      throw new Error('Subscription sign-in is off. Turn it on in Settings › Usage first.');
+    await new Promise((r) => setTimeout(r, 300));
+    const plan = { claude: 'Max', chatgpt: 'Plus', gemini: 'Gemini Code Assist for individuals' }[a.service as string];
+    db.subscriptions[a.service as string] = { account: 'you@example.com', plan: plan ?? null };
+    return db.subscriptions[a.service as string];
+  },
+  subscription_usage: (a) => {
+    const s = a.service as string;
+    if (!db.subscriptions[s]) throw new Error('Not signed in.');
+    const at = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
+    const windows =
+      s === 'claude'
+        ? [
+            { label: '5-hour session', used_percent: 42, resets_at: at(2.3), resets_at_unix: null },
+            { label: 'Weekly (all models)', used_percent: 18, resets_at: at(90), resets_at_unix: null },
+            { label: 'Weekly Opus', used_percent: 86, resets_at: at(90), resets_at_unix: null },
+          ]
+        : s === 'chatgpt'
+          ? [
+              {
+                label: '5-hour window',
+                used_percent: 7,
+                resets_at: null,
+                resets_at_unix: Math.floor(Date.now() / 1000) + 9000,
+              },
+              {
+                label: 'Weekly window',
+                used_percent: 31,
+                resets_at: null,
+                resets_at_unix: Math.floor(Date.now() / 1000) + 300000,
+              },
+            ]
+          : [
+              { label: 'gemini-2.5-flash', used_percent: 3, resets_at: at(11), resets_at_unix: null },
+              { label: 'gemini-2.5-pro', used_percent: 25, resets_at: at(11), resets_at_unix: null },
+            ];
+    return { service: s, account: db.subscriptions[s].account, plan: db.subscriptions[s].plan, windows };
+  },
+  subscription_sign_out: (a) => {
+    delete db.subscriptions[a.service as string];
   },
   remove_provider: (a) => {
     db.providers = db.providers.filter((x) => x.id !== a.id);

@@ -23,6 +23,7 @@ export type View = 'home' | 'chat' | 'goal';
 export type SettingsTab =
   | 'general'
   | 'providers'
+  | 'usage'
   | 'combos'
   | 'permissions'
   | 'optimization'

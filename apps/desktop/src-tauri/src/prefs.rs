@@ -40,6 +40,8 @@ pub struct Prefs {
     pub remote_port: u16,
     pub remote_continue_on_disconnect: bool,
     pub emergency_shortcut: String,
+    /// Opt-in, unsupported subscription sign-in (Claude, ChatGPT, Gemini).
+    pub subscription_signin: bool,
     pub seen_resume: BTreeMap<String, u64>,
 }
 
@@ -83,6 +85,7 @@ impl Default for Prefs {
             // Ctrl+Shift+Esc is reserved by Windows (Task Manager) and
             // Cmd+Alt+Esc by macOS (Force Quit), so use a free chord.
             emergency_shortcut: DEFAULT_EMERGENCY_SHORTCUT.into(),
+            subscription_signin: false,
             seen_resume: BTreeMap::new(),
         }
     }

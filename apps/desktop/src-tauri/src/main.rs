@@ -4,6 +4,7 @@ mod chat;
 mod cmds;
 mod prefs;
 mod state;
+mod usage;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -289,6 +290,10 @@ fn main() {
             chat::stop,
             cmds::app_info,
             cmds::prefs_get,
+            usage::usage_overview,
+            usage::subscription_sign_in,
+            usage::subscription_usage,
+            usage::subscription_sign_out,
             cmds::prefs_save,
             cmds::hardware,
             cmds::models,

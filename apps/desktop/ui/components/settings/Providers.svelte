@@ -105,9 +105,10 @@
 {/if}
 
 <p class="xsmall faint note">
-  Sign-in with provider accounts (OAuth) isn't offered: the OpenAI, Anthropic and Gemini developer APIs authenticate
-  with API keys. Conductor never extracts credentials from other apps. Usage numbers shown in Conductor are estimates
-  unless the provider reports them.
+  The OpenAI, Anthropic and Gemini developer APIs authenticate with API keys. Conductor never extracts credentials from
+  other apps. See how much you have left in <button class="linkish" onclick={() => (app.settingsTab = 'usage')}
+    >Usage</button
+  >, which also has an unsupported, opt-in sign-in for Claude, ChatGPT and Gemini subscriptions.
 </p>
 
 <style>
@@ -144,5 +145,14 @@
   }
   .note {
     margin-top: var(--s5);
+  }
+  .linkish {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
   }
 </style>

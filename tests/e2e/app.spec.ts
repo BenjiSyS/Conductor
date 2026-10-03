@@ -149,6 +149,7 @@ test.describe('daily use', () => {
       ['Appearance', 'Appearance'],
       ['Updates', 'Updates'],
       ['Providers', 'Providers'],
+      ['Usage', 'Usage'],
       ['Combos', 'Combos'],
       ['Instructions', 'Instructions'],
       ['Permissions', 'Permissions'],
@@ -165,6 +166,57 @@ test.describe('daily use', () => {
     }
     await s.getByRole('navigation').getByRole('button', { name: 'Combos', exact: true }).click();
     await page.screenshot({ path: `${shots}/13-settings-combos.png` });
+  });
+
+  test('usage: themed per provider, API limits, opt-in subscription sign-in', async ({ page }) => {
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const s = page.getByRole('dialog', { name: 'Settings' });
+    await s.getByRole('navigation').getByRole('button', { name: 'Usage', exact: true }).click();
+    const panel = s.getByTestId('usage-panel');
+    const tabs = s.getByRole('tablist', { name: 'AI provider' });
+
+    // Each provider has its own theme.
+    await expect(panel).toHaveAttribute('data-brand', 'claude');
+    const bg = async () => panel.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const claudeBg = await bg();
+    await tabs.getByRole('tab', { name: 'ChatGPT' }).click();
+    await expect(panel).toHaveAttribute('data-brand', 'chatgpt');
+    expect(await bg()).not.toBe(claudeBg);
+
+    // API rate limits come from the provider's last response.
+    await expect(panel.getByText('487 of 500 left')).toBeVisible();
+    await expect(panel.getByText(/This session: 3 replies/)).toBeVisible();
+
+    // Subscription sign-in is off until the user accepts the warning.
+    await expect(panel.getByRole('button', { name: 'Sign in with ChatGPT' })).toHaveCount(0);
+    page.once('dialog', (d) => d.dismiss());
+    await s.getByRole('switch', { name: 'Subscription sign-in' }).click();
+    await expect(s.getByRole('switch', { name: 'Subscription sign-in' })).toHaveAttribute('aria-checked', 'false');
+    page.once('dialog', (d) => {
+      expect(d.message()).toContain('not supported');
+      void d.accept();
+    });
+    await s.getByRole('switch', { name: 'Subscription sign-in' }).click();
+    await expect(s.getByRole('switch', { name: 'Subscription sign-in' })).toHaveAttribute('aria-checked', 'true');
+
+    for (const [id, label, meter, used] of [
+      ['claude', 'Claude', '5-hour session used', '42'],
+      ['chatgpt', 'ChatGPT', 'Weekly window used', '31'],
+      ['gemini', 'Gemini', 'gemini-2.5-pro used', '25'],
+    ] as const) {
+      await tabs.getByRole('tab', { name: label }).click();
+      await expect(panel).toHaveAttribute('data-brand', id);
+      await panel.getByRole('button', { name: `Sign in with ${label}` }).click();
+      await expect(panel.getByRole('meter', { name: meter })).toHaveAttribute('aria-valuenow', used);
+      await expect(panel.getByText('you@example.com')).toBeVisible();
+      await page.screenshot({ path: `${shots}/22-usage-${id}.png` });
+    }
+    // Near-limit windows are highlighted.
+    await tabs.getByRole('tab', { name: 'Claude' }).click();
+    await expect(panel.locator('.meter span.hot')).toHaveCount(1);
+
+    await panel.getByRole('button', { name: 'Sign out' }).click();
+    await expect(panel.getByRole('button', { name: 'Sign in with Claude' })).toBeVisible();
   });
 
   test('full access is obvious and revocable', async ({ page }) => {

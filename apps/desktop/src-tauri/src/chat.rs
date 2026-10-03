@@ -674,6 +674,7 @@ pub async fn send_message(
                     store.save_conversation(&conversation).map_err(err)?;
                     let text = conversation.messages.last().map(|m| m.text.clone()).unwrap_or_default();
                     emit(&text, "complete", input, output, &notice);
+                    crate::usage::record(&config.id, input, output);
                     let _ = store.history(Some(project.id.clone()), "chat", &format!("{} answered ({:?})", config.name, mode));
                     final_result = Ok(());
                     break;
