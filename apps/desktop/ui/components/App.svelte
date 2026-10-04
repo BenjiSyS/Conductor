@@ -85,7 +85,8 @@
     <main class="main">
       {#if !app.native}
         <div class="preview-banner" role="note">
-          Browser preview — the interface only. Open the Conductor desktop app to work with real projects and providers.
+          Browser preview — sample data only. Open the Conductor desktop app to work with real projects, providers and
+          their live model lists.
         </div>
       {/if}
       <div class="stage">

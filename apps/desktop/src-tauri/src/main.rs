@@ -349,6 +349,7 @@ fn main() {
             extras::env_install,
             extras::mcp_connect_remote,
             extras::mcp_sign_in,
+            extras::models_refresh,
             bridge::cli_bridge_connect,
             usage::subscription_sign_in,
             usage::subscription_usage,

@@ -65,5 +65,11 @@ codegen-units = 1
 strip = true
 opt-level = 3
 
+# Keep dev builds small: line tables for our crates (readable backtraces),
+# no debug info for dependencies. Cuts the target folder by tens of GB.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 opt-level = 1
+debug = false
