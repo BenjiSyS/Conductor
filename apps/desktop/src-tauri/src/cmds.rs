@@ -387,6 +387,12 @@ pub async fn goal_clarify(
     objective: String,
     target: String,
 ) -> CmdResult<QuestionRound> {
+    // Large pasted text arrives as chips; give the planner the text itself.
+    let objective = conductor_engine::pastes::expand(
+        &objective,
+        &state.data_dir.join("pastes"),
+        GOAL_PASTE_BUDGET,
+    );
     let p = project(&state, &project_id)?;
     let mem = ProjectMemory::load(&state.data_dir, &project_id);
     let (model_key, _, _) = chat::resolve_target(&state, &target, Mode::Plan, &[])?;
@@ -453,8 +459,16 @@ pub struct NewGoal {
     answers: Vec<(String, Answer)>,
 }
 
+/// How much pasted text a Goal objective may carry (characters).
+const GOAL_PASTE_BUDGET: usize = 60_000;
+
 #[tauri::command]
-pub async fn goal_create(state: State<'_, AppState>, goal: NewGoal) -> CmdResult<GoalRecord> {
+pub async fn goal_create(state: State<'_, AppState>, mut goal: NewGoal) -> CmdResult<GoalRecord> {
+    goal.objective = conductor_engine::pastes::expand(
+        &goal.objective,
+        &state.data_dir.join("pastes"),
+        GOAL_PASTE_BUDGET,
+    );
     let p = project(&state, &goal.project_id)?;
     let mut mem = ProjectMemory::load(&state.data_dir, &goal.project_id);
     if let Some(round) = &goal.round {
