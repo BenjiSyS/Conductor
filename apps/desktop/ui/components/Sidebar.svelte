@@ -124,7 +124,7 @@
       title="New Goal"
       disabled={!app.project}
       onclick={() => {
-        app.mode = 'goal';
+        app.draft = '/goal ';
         app.view = 'home';
         app.conversationId = null;
         app.goalId = null;

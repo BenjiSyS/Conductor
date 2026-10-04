@@ -113,6 +113,39 @@ test.describe('daily use', () => {
     await expect(prompt).not.toHaveValue(/Pasted text/);
   });
 
+  test('only Chat and Agent are modes; /goal and /plan start the others', async ({ page }) => {
+    const modes = page.getByRole('group', { name: 'Mode' });
+    await expect(modes.getByRole('button')).toHaveText(['Chat', 'Agent']);
+    const prompt = page.getByLabel('Prompt');
+    // Typing "/" offers the commands; Tab completes the first match.
+    await prompt.fill('/');
+    const menu = page.getByRole('listbox', { name: 'Commands' });
+    await expect(menu.getByRole('option')).toHaveCount(2);
+    await prompt.fill('/pl');
+    await expect(menu.getByRole('option')).toHaveCount(1);
+    await prompt.press('Tab');
+    await expect(prompt).toHaveValue('/plan ');
+    await expect(page.getByRole('heading', { name: 'Plan', exact: true })).toBeVisible();
+    await page.screenshot({ path: `${shots}/31-slash-plan.png` });
+    // An empty command explains what to add instead of sending.
+    await prompt.press('Enter');
+    await expect(page.getByText('Describe what to plan after /plan')).toBeVisible();
+    await prompt.fill('/plan Split the parser into modules');
+    await prompt.press('Enter');
+    const sent = page.getByRole('article', { name: 'user message' });
+    await expect(sent).toContainText('Split the parser into modules');
+    await expect(sent).not.toContainText('/plan');
+    await expect(page.getByRole('button', { name: 'Send' })).toBeVisible({ timeout: 15_000 });
+    // The mode returns to Chat afterwards.
+    await expect(modes.getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true');
+    // The command palette prefills /goal.
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('Start a Goal');
+    await page.keyboard.press('Enter');
+    await expect(prompt).toHaveValue('/goal ');
+    await expect(page.getByRole('button', { name: 'Start Goal' })).toBeVisible();
+  });
+
   test('stop interrupts a streaming reply', async ({ page }) => {
     await page.getByLabel('Prompt').fill('Explain everything');
     await page.getByLabel('Prompt').press('Enter');
@@ -161,11 +194,10 @@ test.describe('daily use', () => {
   });
 
   test('goal: questions, decide for me, live progress, verified completion', async ({ page }) => {
-    await page.getByRole('button', { name: 'Goal', exact: true }).click();
+    await page.getByLabel('Prompt').fill('/goal Build a small multiplayer lobby');
     await expect(page.getByRole('heading', { name: 'Start a Goal' })).toBeVisible();
     await page.getByRole('button', { name: /Checks/ }).click();
     await page.getByLabel(/Definition of Done/).fill('cargo test');
-    await page.getByLabel('Prompt').fill('Build a small multiplayer lobby');
     await page.getByRole('button', { name: 'Start Goal' }).click();
     const card = page.getByRole('region', { name: 'A few questions before starting' });
     await expect(card.getByText('Which platforms matter?')).toBeVisible();

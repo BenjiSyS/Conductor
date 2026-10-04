@@ -134,10 +134,9 @@ try {
   });
 
   await step('Goal: filtered questions, plan, tools, review, Test Gate, verified complete', async () => {
-    await page.getByRole('button', { name: 'Goal', exact: true }).click();
+    await page.getByLabel('Prompt').fill('/goal Add a greeting file to the project');
     await page.getByRole('button', { name: /Checks/ }).click();
     await page.getByLabel(/Definition of Done/).fill('git ls-files --others --exclude-standard --error-unmatch greeting.txt');
-    await page.getByLabel('Prompt').fill('Add a greeting file to the project');
     await page.getByRole('button', { name: 'Start Goal' }).click();
     const card = page.getByRole('region', { name: 'A few questions before starting' });
     await card.getByText('Which platforms matter?').waitFor({ timeout: 20_000 });

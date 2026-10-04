@@ -71,7 +71,10 @@ class AppState {
   goalId = $state<string | null>(null);
   view = $state<View>('home');
 
+  /** Chat or Agent; Goal and Plan are chosen per message with /goal and /plan. */
   mode = $state<Mode>('chat');
+  /** Keeps Goal/Plan active while a slash-command message is being started. */
+  forcedMode = $state<Mode | null>(null);
   target = $state<string | null>(null);
   effort = $state<string>('auto');
   draft = $state('');
@@ -123,6 +126,17 @@ class AppState {
 export const app = new AppState();
 
 let toastId = 0;
+/** The slash command at the start of the prompt, if any. */
+export function slashCommand(text: string): 'goal' | 'plan' | null {
+  const m = /^\/(goal|plan)(?=\s|$)/i.exec(text);
+  return m ? (m[1].toLowerCase() as 'goal' | 'plan') : null;
+}
+
+/** The mode the current prompt will run in. */
+export function draftMode(): Mode {
+  return app.forcedMode ?? slashCommand(app.draft) ?? (app.mode === 'agent' ? 'agent' : 'chat');
+}
+
 export function toast(text: string, kind: Toast['kind'] = 'info', action?: Toast['action']) {
   const t = { id: ++toastId, text, kind, action };
   app.toasts = [...app.toasts, t];
