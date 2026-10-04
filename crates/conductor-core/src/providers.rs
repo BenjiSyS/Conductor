@@ -151,6 +151,29 @@ async fn catalog_page(
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+/// OpenAI models that can't chat (embeddings, speech, images, moderation,
+/// legacy completions). New chat models are kept automatically.
+fn openai_chat_model(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    ![
+        "embedding",
+        "tts",
+        "whisper",
+        "dall-e",
+        "moderation",
+        "transcribe",
+        "-audio",
+        "realtime",
+        "image",
+        "davinci",
+        "babbage",
+        "-search-",
+        "sora",
+    ]
+    .iter()
+    .any(|k| id.contains(k))
+}
+
 fn catalog_model(kind: &ProviderKind, item: &Value) -> Option<Model> {
     if *kind == ProviderKind::Gemini
         && !item["supportedGenerationMethods"]
@@ -168,6 +191,10 @@ fn catalog_model(kind: &ProviderKind, item: &Value) -> Option<Model> {
         .as_str()?;
     let id = id.strip_prefix("models/").unwrap_or(id);
     if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+        return None;
+    }
+    // OpenAI lists every model it serves; keep the ones that can chat.
+    if *kind == ProviderKind::Openai && !openai_chat_model(id) {
         return None;
     }
     let name_field = if *kind == ProviderKind::Anthropic {
@@ -193,7 +220,21 @@ fn catalog_model(kind: &ProviderKind, item: &Value) -> Option<Model> {
             .map(str::to_string)
             .collect()
     } else {
-        vec![]
+        // OpenAI-compatible catalogs (e.g. Conductor's app bridge) may
+        // declare the effort levels a model accepts.
+        item["supported_efforts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|e| {
+                [
+                    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+                ]
+                .contains(e)
+            })
+            .map(str::to_string)
+            .collect()
     };
     Some(Model {
         id: id.into(),
@@ -1395,6 +1436,37 @@ mod tests {
             request_body(&config, &request),
             Err(Error::Approval(_))
         ));
+    }
+    #[test]
+    fn openai_catalog_keeps_new_chat_models_and_reads_declared_efforts() {
+        let keep = ["gpt-6.1-sol", "gpt-6-astra", "o9-pro", "gpt-7"];
+        let drop = [
+            "text-embedding-4-large",
+            "gpt-6-tts",
+            "whisper-2",
+            "dall-e-4",
+            "omni-moderation-latest",
+            "gpt-6-realtime",
+            "gpt-image-2",
+        ];
+        for id in keep {
+            assert!(
+                catalog_model(&ProviderKind::Openai, &json!({"id": id})).is_some(),
+                "{id}"
+            );
+        }
+        for id in drop {
+            assert!(
+                catalog_model(&ProviderKind::Openai, &json!({"id": id})).is_none(),
+                "{id}"
+            );
+        }
+        let m = catalog_model(
+            &ProviderKind::OpenaiCompatible,
+            &json!({"id":"gpt-6.1-sol","supported_efforts":["low","ultra","bogus"]}),
+        )
+        .unwrap();
+        assert_eq!(m.efforts, vec!["low", "ultra"]);
     }
     #[tokio::test]
     async fn records_rate_limit_headers_even_on_429() -> Result<()> {

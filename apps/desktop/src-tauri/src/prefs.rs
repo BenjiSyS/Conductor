@@ -48,6 +48,9 @@ pub struct Prefs {
     pub notify_sound: bool,
     /// Warn when a plan window has under 10% left.
     pub notify_low_usage: bool,
+    /// Keep connected signed-in apps (Codex CLI, Antigravity CLI, Claude
+    /// Code) updated so their newest models can be used.
+    pub auto_update_apps: bool,
     pub seen_resume: BTreeMap<String, u64>,
 }
 
@@ -95,6 +98,7 @@ impl Default for Prefs {
             notify_done: true,
             notify_sound: true,
             notify_low_usage: true,
+            auto_update_apps: true,
             seen_resume: BTreeMap::new(),
         }
     }

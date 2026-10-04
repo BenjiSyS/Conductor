@@ -149,18 +149,38 @@ pub async fn detect() -> Vec<Detected> {
     out
 }
 
+/// A model the app offers, with the effort levels it accepts (if known).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BridgeModel {
+    pub id: String,
+    pub efforts: Vec<String>,
+}
+
+fn plain(ids: impl IntoIterator<Item = String>) -> Vec<BridgeModel> {
+    ids.into_iter()
+        .map(|id| BridgeModel {
+            id,
+            efforts: vec![],
+        })
+        .collect()
+}
+
+/// Effort levels Conductor passes through to the apps.
+const EFFORTS: [&str; 7] = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+
 /// Models the app offers. `default` lets the app pick its own.
-pub async fn models(cli: Cli) -> Vec<String> {
-    let mut out = vec!["default".to_string()];
+pub async fn models(cli: Cli) -> Vec<BridgeModel> {
+    let mut out = plain(["default".to_string()]);
     match cli {
         Cli::Agy => {
             if let Ok(mut c) = command(cli, &["models".into()]) {
                 if let Ok(Ok(o)) = tokio::time::timeout(Duration::from_secs(60), c.output()).await {
-                    out.extend(parse_agy_models(&String::from_utf8_lossy(&o.stdout)));
+                    out.extend(plain(parse_agy_models(&String::from_utf8_lossy(&o.stdout))));
                 }
             }
         }
-        Cli::Claude => out.extend(["sonnet".into(), "opus".into()]),
+        // Aliases always point at the newest Sonnet / Opus.
+        Cli::Claude => out.extend(plain(["sonnet".to_string(), "opus".to_string()])),
         Cli::Codex => {
             // Codex's own catalog for the signed-in account. Its configured
             // default may not be allowed for the account, so list real models.
@@ -177,8 +197,42 @@ pub async fn models(cli: Cli) -> Vec<String> {
     out
 }
 
+/// Update the app with its own updater (`codex update`, `agy update`,
+/// `claude update`), so new models it supports become available.
+pub async fn update(cli: Cli) -> Result<String, String> {
+    let mut c = command(cli, &["update".into()])?;
+    c.stdin(Stdio::null());
+    let out = tokio::time::timeout(Duration::from_secs(600), c.output())
+        .await
+        .map_err(|_| format!("Updating {} timed out.", cli.label()))?
+        .map_err(|e| e.to_string())?;
+    let text = format!(
+        "{}
+{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let last = text
+        .lines()
+        .rev()
+        .find(|l| {
+            let l = l.trim();
+            !l.is_empty() && !l.starts_with("npm warn") && !l.starts_with("npm notice")
+        })
+        .unwrap_or("Up to date")
+        .trim()
+        .chars()
+        .take(200)
+        .collect::<String>();
+    if out.status.success() {
+        Ok(last)
+    } else {
+        Err(format!("Updating {} failed: {last}", cli.label()))
+    }
+}
+
 /// Visible models from `codex debug models` (hidden/internal ones skipped).
-pub fn parse_codex_models(json: &str) -> Vec<String> {
+pub fn parse_codex_models(json: &str) -> Vec<BridgeModel> {
     let Ok(v) = serde_json::from_str::<Value>(json) else {
         return vec![];
     };
@@ -187,12 +241,22 @@ pub fn parse_codex_models(json: &str) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter(|m| m["visibility"] == "list" && m["supported_in_api"] != false)
-        .filter_map(|m| m["slug"].as_str())
-        .filter(|id| {
+        .filter_map(|m| {
+            let id = m["slug"].as_str()?;
             id.chars()
                 .all(|c| c.is_ascii_alphanumeric() || "-._".contains(c))
+                .then(|| BridgeModel {
+                    id: id.to_string(),
+                    efforts: m["supported_reasoning_levels"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|l| l["effort"].as_str())
+                        .filter(|e| EFFORTS.contains(e))
+                        .map(str::to_string)
+                        .collect(),
+                })
         })
-        .map(str::to_string)
         .collect()
 }
 
@@ -277,8 +341,15 @@ pub fn prompt_from_messages(messages: &[Value]) -> String {
 }
 
 /// Arguments and stdin for one non-interactive run.
-pub fn invocation(cli: Cli, model: &str, prompt: &str) -> (Vec<String>, Option<String>) {
+pub fn invocation(
+    cli: Cli,
+    model: &str,
+    effort: Option<&str>,
+    prompt: &str,
+) -> (Vec<String>, Option<String>) {
     let model = (model != "default" && !model.is_empty()).then(|| model.to_string());
+    // Only known effort names are passed on; anything else is ignored.
+    let effort = effort.filter(|e| EFFORTS.contains(e)).map(str::to_string);
     let s = |v: &str| v.to_string();
     match cli {
         Cli::Agy => {
@@ -294,6 +365,11 @@ pub fn invocation(cli: Cli, model: &str, prompt: &str) -> (Vec<String>, Option<S
             if let Some(m) = model {
                 a.extend([s("--model"), m]);
             }
+            if let Some(e) =
+                effort.filter(|e| ["low", "medium", "high", "xhigh", "max"].contains(&e.as_str()))
+            {
+                a.extend([s("--effort"), e]);
+            }
             (a, None)
         }
         Cli::Codex => {
@@ -306,6 +382,9 @@ pub fn invocation(cli: Cli, model: &str, prompt: &str) -> (Vec<String>, Option<S
             ];
             if let Some(m) = model {
                 a.extend([s("-m"), m]);
+            }
+            if let Some(e) = effort {
+                a.extend([s("-c"), format!("model_reasoning_effort=\"{e}\"")]);
             }
             a.push(s("-"));
             (a, Some(prompt.into()))
@@ -509,13 +588,14 @@ fn looks_signed_out(msg: &str) -> bool {
 pub async fn run(
     cli: Cli,
     model: &str,
+    effort: Option<&str>,
     prompt: &str,
     cancel: CancellationToken,
     mut emit: impl FnMut(Event) + Send,
 ) -> Result<(), String> {
     let scratch = std::env::temp_dir().join(format!("conductor-bridge-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
-    let result = run_in(cli, model, prompt, &scratch, cancel, &mut emit).await;
+    let result = run_in(cli, model, effort, prompt, &scratch, cancel, &mut emit).await;
     let _ = std::fs::remove_dir_all(&scratch);
     result.map_err(|e| {
         if looks_signed_out(&e) {
@@ -533,12 +613,13 @@ pub async fn run(
 async fn run_in(
     cli: Cli,
     model: &str,
+    effort: Option<&str>,
     prompt: &str,
     cwd: &std::path::Path,
     cancel: CancellationToken,
     emit: &mut (impl FnMut(Event) + Send),
 ) -> Result<(), String> {
-    let (args, stdin) = invocation(cli, model, prompt);
+    let (args, stdin) = invocation(cli, model, effort, prompt);
     let mut cmd = command(cli, &args)?;
     cmd.current_dir(cwd);
     let mut child = cmd
@@ -681,7 +762,7 @@ async fn list_models(
     let data: Vec<Value> = models(cli)
         .await
         .into_iter()
-        .map(|id| json!({"id": id}))
+        .map(|m| json!({"id": m.id, "supported_efforts": m.efforts}))
         .collect();
     Json(json!({"object":"list","data":data})).into_response()
 }
@@ -699,6 +780,7 @@ async fn chat(
         return error_json(StatusCode::UNAUTHORIZED, "Bridge key rejected");
     }
     let model = body["model"].as_str().unwrap_or("default").to_string();
+    let effort = body["reasoning_effort"].as_str().map(str::to_string);
     let prompt = prompt_from_messages(
         body["messages"]
             .as_array()
@@ -713,21 +795,28 @@ async fn chat(
         let frame = |v: Value| format!("data: {v}\n\n");
         let (mut input, mut output) = (0, 0);
         let tx2 = tx.clone();
-        let result = run(cli, &model, &prompt, cancel, |ev| match ev {
-            Event::Delta(t) => {
-                let _ = tx2.try_send(frame(
-                    json!({"choices":[{"index":0,"delta":{"content":t}}]}),
-                ));
-            }
-            Event::Usage {
-                input: i,
-                output: o,
-            } => {
-                input = input.max(i);
-                output = output.max(o);
-            }
-            _ => {}
-        })
+        let result = run(
+            cli,
+            &model,
+            effort.as_deref(),
+            &prompt,
+            cancel,
+            |ev| match ev {
+                Event::Delta(t) => {
+                    let _ = tx2.try_send(frame(
+                        json!({"choices":[{"index":0,"delta":{"content":t}}]}),
+                    ));
+                }
+                Event::Usage {
+                    input: i,
+                    output: o,
+                } => {
+                    input = input.max(i);
+                    output = output.max(o);
+                }
+                _ => {}
+            },
+        )
         .await;
         match result {
             Ok(()) => {
@@ -903,9 +992,21 @@ process.stdin.on('end', () => {
             {"slug":"gpt-reserve","visibility":"hide","supported_in_api":true},
             {"slug":"gpt-5.6-luna","visibility":"list"},
             {"slug":"bad slug","visibility":"list"}]}"#;
+        let ids: Vec<String> = parse_codex_models(json).into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec!["gpt-6-astra", "gpt-5.6-luna"]);
+        let with_efforts = r#"{"models":[{"slug":"gpt-6.1-sol","visibility":"list","supported_reasoning_levels":[{"effort":"low"},{"effort":"ultra"},{"effort":"bogus"}]}]}"#;
         assert_eq!(
-            parse_codex_models(json),
-            vec!["gpt-6-astra", "gpt-5.6-luna"]
+            parse_codex_models(with_efforts)[0].efforts,
+            vec!["low", "ultra"]
+        );
+        let (a, _) = invocation(Cli::Codex, "gpt-6.1-sol", Some("xhigh"), "q");
+        assert!(a
+            .windows(2)
+            .any(|w| w == ["-c", "model_reasoning_effort=\"xhigh\""]));
+        let (a, _) = invocation(Cli::Codex, "gpt-6.1-sol", Some("evil\" --flag"), "q");
+        assert!(
+            !a.iter().any(|x| x.contains("evil")),
+            "unknown effort names are dropped"
         );
         assert!(parse_codex_models("not json").is_empty());
         assert!(looks_rate_limited(
@@ -1039,14 +1140,15 @@ process.stdin.on('end', () => {
 
     #[test]
     fn invocations_are_read_only_and_never_put_prompts_on_shim_command_lines() {
-        let (a, stdin) = invocation(Cli::Codex, "default", "q \"quoted\" 100%");
+        let (a, stdin) = invocation(Cli::Codex, "default", None, "q \"quoted\" 100%");
         assert!(a.contains(&"read-only".to_string()) && !a.iter().any(|x| x.contains("quoted")));
         assert_eq!(stdin.as_deref(), Some("q \"quoted\" 100%"));
-        let (a, stdin) = invocation(Cli::Claude, "opus", "q");
+        let (a, stdin) = invocation(Cli::Claude, "opus", None, "q");
         assert!(a.windows(2).any(|w| w == ["--permission-mode", "plan"]));
         assert!(a.windows(2).any(|w| w == ["--model", "opus"]));
         assert!(stdin.is_some());
-        let (a, stdin) = invocation(Cli::Agy, "gemini-3.8-flash-low", "q");
+        let (a, stdin) = invocation(Cli::Agy, "gemini-3.8-flash-low", Some("high"), "q");
+        assert!(a.windows(2).any(|w| w == ["--effort", "high"]));
         assert!(
             a.contains(&"--sandbox".to_string()) && a.windows(2).any(|w| w == ["--mode", "plan"])
         );

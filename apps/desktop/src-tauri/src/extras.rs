@@ -140,6 +140,21 @@ pub fn start(app: &AppHandle) {
         }
     });
 
+    // Signed-in apps: update connected ones daily, then re-list models.
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        loop {
+            if handle
+                .try_state::<AppState>()
+                .is_some_and(|s| s.prefs().auto_update_apps)
+            {
+                update_connected_apps(&handle).await;
+            }
+            tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+        }
+    });
+
     // Model lists: shortly after start, then every 6 hours.
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -500,4 +515,60 @@ pub async fn refresh_catalogs(app: &AppHandle) -> usize {
 #[tauri::command]
 pub async fn models_refresh(app: AppHandle) -> CmdResult<usize> {
     Ok(refresh_catalogs(&app).await)
+}
+
+// ---------- keep signed-in apps current ----------
+
+fn connected_bridges(state: &AppState) -> Vec<conductor_engine::cli_bridge::Cli> {
+    let providers: Vec<conductor_core::domain::ProviderConfig> =
+        state.store.list("provider").unwrap_or_default();
+    providers
+        .iter()
+        .filter(|p| p.enabled)
+        .filter_map(|p| conductor_engine::cli_bridge::Cli::from_provider_id(&p.id))
+        .collect()
+}
+
+/// Update every connected signed-in app, then refresh model lists.
+pub async fn update_connected_apps(app: &AppHandle) -> Vec<(String, Result<String, String>)> {
+    let Some(state) = app.try_state::<AppState>() else {
+        return vec![];
+    };
+    let mut out = vec![];
+    for cli in connected_bridges(&state) {
+        out.push((
+            cli.label().to_string(),
+            conductor_engine::cli_bridge::update(cli).await,
+        ));
+    }
+    if !out.is_empty() {
+        refresh_catalogs(app).await;
+    }
+    out
+}
+
+/// Update one signed-in app now (or all connected ones when `cli` is empty).
+#[tauri::command]
+pub async fn cli_bridge_update(
+    app: AppHandle,
+    cli: Option<String>,
+) -> CmdResult<Vec<serde_json::Value>> {
+    let results = match cli
+        .as_deref()
+        .and_then(conductor_engine::cli_bridge::Cli::parse)
+    {
+        Some(one) => {
+            let r = conductor_engine::cli_bridge::update(one).await;
+            refresh_catalogs(&app).await;
+            vec![(one.label().to_string(), r)]
+        }
+        None => update_connected_apps(&app).await,
+    };
+    Ok(results
+        .into_iter()
+        .map(|(name, r)| match r {
+            Ok(msg) => json!({ "app": name, "ok": true, "message": msg }),
+            Err(e) => json!({ "app": name, "ok": false, "message": e }),
+        })
+        .collect())
 }

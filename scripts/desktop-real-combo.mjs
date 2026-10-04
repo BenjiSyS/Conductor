@@ -52,11 +52,23 @@ try {
     await page.getByRole('dialog', { name: 'Set up Conductor' }).waitFor({ timeout: 30_000 });
     const codex = await invoke('cli_bridge_connect', { cli: 'codex' });
     const agy = await invoke('cli_bridge_connect', { cli: 'agy' });
-    codexModel = codex.models.find((m) => m.id !== 'default')?.id;
+    // Prefer the newest workhorse model when the account offers it.
+    codexModel = (codex.models.find((m) => m.id === 'gpt-6.1-sol') ?? codex.models.find((m) => m.id !== 'default'))?.id;
     geminiModel = agy.models.find((m) => /flash.*low/.test(m.id))?.id ?? agy.models[0].id;
     if (!codexModel) throw new Error(`Codex listed no real models: ${codex.models.map((m) => m.id)}`);
     console.log(`    ChatGPT models: ${codex.models.map((m) => m.id).join(', ')}`);
     console.log(`    Gemini model used: ${geminiModel}`);
+  });
+
+  await step('newest ChatGPT models are listed with their effort levels; app updates run', async () => {
+    const r = await invoke('cli_bridge_update', { cli: 'codex' });
+    console.log(`    Codex update: ${r[0].ok ? 'ok' : 'failed'} — ${r[0].message}`);
+    if (!r[0].ok) throw new Error(r[0].message);
+    const p = (await invoke('snapshot')).providers.find((x) => x.id === 'cli-codex');
+    const sol = p.models.find((m) => m.id === 'gpt-6.1-sol');
+    if (!sol) throw new Error(`gpt-6.1-sol missing: ${p.models.map((m) => m.id)}`);
+    if (!sol.efforts.includes('ultra') || !sol.efforts.includes('low')) throw new Error(`efforts: ${sol.efforts}`);
+    console.log(`    gpt-6.1-sol efforts: ${sol.efforts.join(', ')}`);
   });
 
   await step('a ChatGPT-first Combo answers, handing off to Gemini if ChatGPT is limited', async () => {
@@ -80,15 +92,25 @@ try {
     const projectId = (await invoke('snapshot')).projects[0].id;
     const conv = await invoke('create_conversation', { projectId, mode: 'chat' });
     const started = Date.now();
-    const sent = await invoke('send_message', { conversationId: conv.id, text: 'Reply with exactly the word: pong', target: 'combo:real-accounts', effort: null, mode: 'chat' }).then(
+    const sent = await invoke('send_message', {
+      conversationId: conv.id,
+      text: 'Reply with exactly the word: pong',
+      target: 'combo:real-accounts',
+      effort: null,
+      mode: 'chat',
+    }).then(
       () => '',
       (e) => String(e),
     );
     const m = await reply(conv.id, 240_000);
-    console.log(`    answered by ${m.provider} in ${Math.round((Date.now() - started) / 1000)} s: "${m.text.trim().slice(0, 60)}"`);
+    console.log(
+      `    answered by ${m.provider} in ${Math.round((Date.now() - started) / 1000)} s: "${m.text.trim().slice(0, 60)}"`,
+    );
     if (sent) console.log(`    send reported: ${sent.slice(0, 160)}`);
     if (m.status !== 'complete' || !/pong/i.test(m.text)) throw new Error(`${m.status}: ${m.text.slice(0, 200)}`);
-    const usage = (await invoke('usage_overview')).providers.filter((p) => p.session.requests > 0).map((p) => `${p.name}=${p.session.requests}`);
+    const usage = (await invoke('usage_overview')).providers
+      .filter((p) => p.session.requests > 0)
+      .map((p) => `${p.name}=${p.session.requests}`);
     console.log(`    replies counted: ${usage.join(', ')}`);
   });
 } catch {

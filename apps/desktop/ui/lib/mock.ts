@@ -55,6 +55,7 @@ const prefsDefault: Prefs = {
   notify_done: true,
   notify_sound: true,
   notify_low_usage: true,
+  auto_update_apps: true,
   seen_resume: {},
 };
 
@@ -588,6 +589,12 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
   },
   profile_info: () => ({ user: 'Alex' }),
   models_refresh: () => 0,
+  cli_bridge_update: async () => {
+    await new Promise((r) => setTimeout(r, 200));
+    return db.providers
+      .filter((p) => p.id.startsWith('cli-'))
+      .map((p) => ({ app: p.name, ok: true, message: 'Already up to date' }));
+  },
   setup_prepare: () => {},
   setup_scan: async () => {
     await new Promise((r) => setTimeout(r, 150));
