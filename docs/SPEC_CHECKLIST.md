@@ -13,7 +13,7 @@ All 167 sections remain in scope. The machine-readable [requirements registry](r
 | 7 | [Combos](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 8 | [Provider-aware routing](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 9 | [Usage Reserve](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
-| 10 | [Effort / reasoning controls](CONDUCTOR_MASTER_BUILD_PROMPT.md) | incomplete |
+| 10 | [Effort / reasoning controls](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 11 | [Provider capability cards](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 12 | [Provider catalog updates](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 13 | [Authentication](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
@@ -41,7 +41,7 @@ All 167 sections remain in scope. The machine-readable [requirements registry](r
 | 35 | [Visual testing](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 36 | [Computer use](CONDUCTOR_MASTER_BUILD_PROMPT.md) | incomplete |
 | 37 | [Permission levels](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
-| 38 | [Fast Stop](CONDUCTOR_MASTER_BUILD_PROMPT.md) | incomplete |
+| 38 | [Fast Stop](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 39 | [Emergency Stop](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 40 | [Background service](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 41 | [Session resume](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
@@ -111,7 +111,7 @@ All 167 sections remain in scope. The machine-readable [requirements registry](r
 | 105 | [Tool permission model](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 106 | [Prompt injection defense](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 107 | [Downloads and integrity](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
-| 108 | [Remote security](CONDUCTOR_MASTER_BUILD_PROMPT.md) | incomplete |
+| 108 | [Remote security](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 109 | [Logging](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 110 | [Telemetry](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |
 | 111 | [Open-source quality](CONDUCTOR_MASTER_BUILD_PROMPT.md) | partial |

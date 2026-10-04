@@ -2245,9 +2245,10 @@
       "number": 10,
       "title": "Effort / reasoning controls",
       "line": 445,
-      "status": "incomplete",
+      "status": "partial",
       "evidence": [
-        "Reproduced native failures or contradictory model effort metadata. See REMAINING_WORK.md and target/native-boundary-codex/results.json."
+        "Exact-ID documented effort metadata repaired and bounded engine/core tests pass; unknown IDs remain unknown and provider metadata is preserved. Full native/current-catalog coverage remains pending.",
+        "See docs/VERIFICATION.md and docs/REMAINING_WORK.md; full section scope is not verified."
       ],
       "requirements": [
         {
@@ -5759,9 +5760,10 @@
       "number": 38,
       "title": "Fast Stop",
       "line": 1156,
-      "status": "incomplete",
+      "status": "partial",
       "evidence": [
-        "Reproduced native failures or contradictory model effort metadata. See REMAINING_WORK.md and target/native-boundary-codex/results.json."
+        "Original native boundary run 2026-10-03T23:48:59.299Z passed 28/28: Chat/Agent Stop preserves partial replies and cancels pending approval; browser/computer/queued-task coverage remains unverified.",
+        "See docs/VERIFICATION.md and target/native-boundary-codex/results.json, exe SHA256 8082ab63bc5b726b56170a3f4b218d4d8fca7a3f5ac4c7da660053e1e7cc6e2b."
       ],
       "requirements": [
         {
@@ -5782,15 +5784,19 @@
           "id": "38.3",
           "line": 1161,
           "text": "- agent actions",
-          "status": "unverified",
-          "evidence": []
+          "status": "partial",
+          "evidence": [
+            "Original native boundary run 2026-10-03T23:48:59.299Z passed 28/28: Chat/Agent Stop preserves partial replies and cancels pending approval; browser/computer/queued-task coverage remains unverified."
+          ]
         },
         {
           "id": "38.4",
           "line": 1162,
           "text": "- pending tool calls",
-          "status": "unverified",
-          "evidence": []
+          "status": "partial",
+          "evidence": [
+            "Original native boundary run 2026-10-03T23:48:59.299Z passed 28/28: Chat/Agent Stop preserves partial replies and cancels pending approval; browser/computer/queued-task coverage remains unverified."
+          ]
         },
         {
           "id": "38.5",
@@ -7141,7 +7147,8 @@
       "line": 1443,
       "status": "partial",
       "evidence": [
-        "Candidate source and bounded tests reviewed; remaining full-scope proof in IMPLEMENTATION_AUDIT.md, VERIFICATION.md and REMAINING_WORK.md. Individual requirement lines remain unverified unless specifically reviewed."
+        "Original Windows native harness31/31 (2026-10-04T09:21:14.721Z): configure/diagnose/list/disable/export/remove and actual Agent stdio/HTTP MCP calls. Natural-language discovery/install/update and real catalog/auth flows remain pending.",
+        "See docs/VERIFICATION.md and docs/REMAINING_WORK.md; full section scope is not verified."
       ],
       "requirements": [
         {
@@ -7292,7 +7299,8 @@
       "line": 1473,
       "status": "partial",
       "evidence": [
-        "Candidate source and bounded tests reviewed; remaining full-scope proof in IMPLEMENTATION_AUDIT.md, VERIFICATION.md and REMAINING_WORK.md. Individual requirement lines remain unverified unless specifically reviewed."
+        "Native missing-executable diagnosis and stdio initialize/list pass; tools fixtures exercise HTTP initialize/list and missing credentials without transport. Automatic repair, update and complete doctor statuses remain pending.",
+        "See docs/VERIFICATION.md and docs/REMAINING_WORK.md; full section scope is not verified."
       ],
       "requirements": [
         {
@@ -7429,7 +7437,8 @@
       "line": 1499,
       "status": "partial",
       "evidence": [
-        "Candidate source and bounded tests reviewed; remaining full-scope proof in IMPLEMENTATION_AUDIT.md, VERIFICATION.md and REMAINING_WORK.md. Individual requirement lines remain unverified unless specifically reviewed."
+        "One shared provider-neutral Agent/Goal runtime uses exact project identity and canonical provider selection. Native local-compatible stdio/HTTP calls pass; live Codex/Claude/Gemini cross-provider proof remains pending.",
+        "See docs/VERIFICATION.md and docs/REMAINING_WORK.md; full section scope is not verified."
       ],
       "requirements": [
         {
@@ -7489,7 +7498,8 @@
       "line": 1513,
       "status": "partial",
       "evidence": [
-        "Candidate source and bounded tests reviewed; remaining full-scope proof in IMPLEMENTATION_AUDIT.md, VERIFICATION.md and REMAINING_WORK.md. Individual requirement lines remain unverified unless specifically reviewed."
+        "Original Windows native harness33/33 (2026-10-04T10:10:34.378Z) proves installed skill scripts with literal argv and the project cwd; instructions and tool output reach actual fixture model requests. Engine checks cover declared capabilities, package-contained paths and config/policy changes after approval. Full schemas/adapters, community source and update lifecycle remain pending.",
+        "See docs/VERIFICATION.md and docs/REMAINING_WORK.md; full section scope is not verified."
       ],
       "requirements": [
         {
@@ -7700,7 +7710,8 @@
       "line": 1554,
       "status": "partial",
       "evidence": [
-        "Candidate source and bounded tests reviewed; remaining full-scope proof in IMPLEMENTATION_AUDIT.md, VERIFICATION.md and REMAINING_WORK.md. Individual requirement lines remain unverified unless specifically reviewed."
+        "Native declarative plugin tool runs with literal argv and installed instructions. Runtime checks all declared permissions plus terminal.execute; bounded engine tests cover Plan/denial. Full update/isolation/health lifecycle remains pending.",
+        "See docs/VERIFICATION.md and docs/REMAINING_WORK.md; full section scope is not verified."
       ],
       "requirements": [
         {
@@ -12176,9 +12187,10 @@
       "number": 108,
       "title": "Remote security",
       "line": 2461,
-      "status": "incomplete",
+      "status": "partial",
       "evidence": [
-        "Reproduced native failures or contradictory model effort metadata. See REMAINING_WORK.md and target/native-boundary-codex/results.json."
+        "Original native boundary run 2026-10-03T23:48:59.299Z passed pinned loopback TLS, one-use pairing, scoped HTTP/WebSocket publication/control and revocation after cross-project repair; full LAN/control/audit coverage remains unverified.",
+        "See docs/VERIFICATION.md and target/native-boundary-codex/results.json, exe SHA256 8082ab63bc5b726b56170a3f4b218d4d8fca7a3f5ac4c7da660053e1e7cc6e2b."
       ],
       "requirements": [
         {
@@ -12199,22 +12211,28 @@
           "id": "108.3",
           "line": 2465,
           "text": "- encryption",
-          "status": "unverified",
-          "evidence": []
+          "status": "partial",
+          "evidence": [
+            "Original native boundary run 2026-10-03T23:48:59.299Z passed pinned loopback TLS, one-use pairing, scoped HTTP/WebSocket publication/control and revocation after cross-project repair; full LAN/control/audit coverage remains unverified."
+          ]
         },
         {
           "id": "108.4",
           "line": 2466,
           "text": "- short-lived pairing or trust establishment",
-          "status": "unverified",
-          "evidence": []
+          "status": "partial",
+          "evidence": [
+            "Original native boundary run 2026-10-03T23:48:59.299Z passed pinned loopback TLS, one-use pairing, scoped HTTP/WebSocket publication/control and revocation after cross-project repair; full LAN/control/audit coverage remains unverified."
+          ]
         },
         {
           "id": "108.5",
           "line": 2467,
           "text": "- revocation",
-          "status": "unverified",
-          "evidence": []
+          "status": "partial",
+          "evidence": [
+            "Original native boundary run 2026-10-03T23:48:59.299Z passed pinned loopback TLS, one-use pairing, scoped HTTP/WebSocket publication/control and revocation after cross-project repair; full LAN/control/audit coverage remains unverified."
+          ]
         },
         {
           "id": "108.6",
@@ -12227,8 +12245,10 @@
           "id": "108.7",
           "line": 2469,
           "text": "- scoped project access",
-          "status": "unverified",
-          "evidence": []
+          "status": "partial",
+          "evidence": [
+            "Original native boundary run 2026-10-03T23:48:59.299Z passed pinned loopback TLS, one-use pairing, scoped HTTP/WebSocket publication/control and revocation after cross-project repair; full LAN/control/audit coverage remains unverified."
+          ]
         },
         {
           "id": "108.8",

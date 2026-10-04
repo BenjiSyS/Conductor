@@ -7,12 +7,83 @@
 //! so a plugin cannot silently gain unrestricted access.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::{
+    io::Read,
+    path::{Component, Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::call::Capability;
 use crate::package::{Installed, PackageDir, PackageError};
+
+const MAX_PLUGIN_MANIFEST: usize = 128 * 1024;
+
+fn read_manifest(path: &Path) -> Result<String, PackageError> {
+    let file = std::fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_PLUGIN_MANIFEST as u64 {
+        return Err(PackageError::Invalid(
+            "plugin manifest exceeds 131072 bytes".into(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(MAX_PLUGIN_MANIFEST.min(16 * 1024));
+    file.take(MAX_PLUGIN_MANIFEST as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_PLUGIN_MANIFEST {
+        return Err(PackageError::Invalid(
+            "plugin manifest exceeds 131072 bytes".into(),
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| PackageError::Invalid("plugin manifest is not valid UTF-8".into()))
+}
+
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn safe_relative(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && path.components().all(|component| match component {
+            Component::Normal(name) => {
+                let text = name.to_string_lossy();
+                let stem = text.split('.').next().unwrap_or("").to_ascii_uppercase();
+                !text.is_empty()
+                    && !text.contains(':')
+                    && !text.ends_with([' ', '.'])
+                    && !matches!(
+                        stem.as_str(),
+                        "CON"
+                            | "PRN"
+                            | "AUX"
+                            | "NUL"
+                            | "COM1"
+                            | "COM2"
+                            | "COM3"
+                            | "COM4"
+                            | "COM5"
+                            | "COM6"
+                            | "COM7"
+                            | "COM8"
+                            | "COM9"
+                            | "LPT1"
+                            | "LPT2"
+                            | "LPT3"
+                            | "LPT4"
+                            | "LPT5"
+                            | "LPT6"
+                            | "LPT7"
+                            | "LPT8"
+                            | "LPT9"
+                    )
+            }
+            _ => false,
+        })
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PluginTool {
@@ -51,14 +122,41 @@ fn manual() -> String {
 
 impl PluginManifest {
     pub fn load(dir: &Path) -> Result<Self, PackageError> {
-        let text = std::fs::read_to_string(dir.join("plugin.toml"))?;
+        let text = read_manifest(&dir.join("plugin.toml"))?;
         let m: PluginManifest =
             toml::from_str(&text).map_err(|e| PackageError::Invalid(e.to_string()))?;
         m.validate()?;
+        if let Some(path) = &m.instructions {
+            let relative = Path::new(path);
+            let base = dir.canonicalize()?;
+            if !safe_relative(relative)
+                || !dir
+                    .join(relative)
+                    .canonicalize()
+                    .is_ok_and(|path| path.starts_with(&base))
+            {
+                return Err(PackageError::Invalid(
+                    "plugin instructions path must stay inside its package".into(),
+                ));
+            }
+        }
         Ok(m)
     }
 
     pub fn validate(&self) -> Result<(), PackageError> {
+        if !valid_name(&self.name) {
+            return Err(PackageError::Invalid(
+                "plugin name must use 1-64 ASCII letters, digits, '-' or '_'".into(),
+            ));
+        }
+        if let Some(path) = &self.instructions {
+            let path = Path::new(path);
+            if !safe_relative(path) {
+                return Err(PackageError::Invalid(
+                    "plugin instructions path must stay inside its package".into(),
+                ));
+            }
+        }
         let declared: Vec<Capability> = self
             .permissions
             .iter()
@@ -174,10 +272,21 @@ impl Plugins {
     }
 
     pub fn list(&self) -> Vec<PluginManifest> {
+        let Some(root) = self.dir.root().canonicalize().ok() else {
+            return Vec::new();
+        };
         self.dir
             .installed_names()
             .iter()
-            .filter_map(|n| PluginManifest::load(&self.dir.path_of(n)).ok())
+            .filter_map(|n| {
+                let path = self.dir.path_of(n);
+                let metadata = std::fs::symlink_metadata(&path).ok()?;
+                if !metadata.file_type().is_dir() || !path.canonicalize().ok()?.starts_with(&root) {
+                    return None;
+                }
+                let manifest = PluginManifest::load(&path).ok()?;
+                (manifest.name == *n).then_some(manifest)
+            })
             .collect()
     }
 
@@ -263,5 +372,43 @@ permissions = ["filesystem.write"]
         let templ = GOOD.replace("argv = [\"npx\"", "argv = [\"{prog}\"");
         let m: PluginManifest = toml::from_str(&templ).unwrap();
         assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn runtime_manifest_reads_are_bounded_and_reject_invalid_utf8() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("plugin.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "name='x'\nversion='1'\ndescription='{}'\npermissions=[]",
+                "x".repeat(MAX_PLUGIN_MANIFEST)
+            ),
+        )
+        .unwrap();
+        assert!(
+            PluginManifest::load(d.path()).is_err(),
+            "oversized manifest must be rejected before parsing"
+        );
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(
+            PluginManifest::load(d.path()).is_err(),
+            "invalid UTF-8 manifest must be rejected"
+        );
+        let unsafe_path: PluginManifest = toml::from_str(
+            "name='x'\nversion='1'\ndescription='x'\npermissions=[]\ninstructions='../outside.md'",
+        )
+        .unwrap();
+        assert!(
+            unsafe_path.validate().is_err(),
+            "instruction path cannot escape package"
+        );
+        let unsafe_name: PluginManifest =
+            toml::from_str("name='../outside'\nversion='1'\ndescription='x'\npermissions=[]")
+                .unwrap();
+        assert!(
+            unsafe_name.validate().is_err(),
+            "plugin name cannot escape its install root"
+        );
     }
 }

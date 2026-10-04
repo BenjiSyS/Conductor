@@ -146,6 +146,15 @@ pub struct Message {
     pub created_at: i64,
     pub status: String,
     pub provider: Option<String>,
+    /// Base64-encoded PNG, JPEG, or WebP attachment data.
+    #[serde(default)]
+    pub images: Vec<ImageAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageAttachment {
+    pub mime_type: String,
+    pub data: String,
 }
 impl Message {
     pub fn new(role: Role, text: String) -> Self {
@@ -156,6 +165,7 @@ impl Message {
             created_at: now(),
             status: "complete".into(),
             provider: None,
+            images: Vec::new(),
         }
     }
 }

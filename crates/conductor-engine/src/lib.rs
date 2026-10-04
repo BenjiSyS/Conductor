@@ -15,10 +15,14 @@
 pub mod agent;
 pub mod approvals;
 pub mod catalog;
+pub mod cli_bridge;
 pub mod combos;
 pub mod events;
 pub mod goals;
+pub mod integrations;
+pub mod mcp_oauth;
 pub mod memory;
+pub mod pastes;
 pub mod paths;
 pub mod profiles;
 pub mod subscriptions;

@@ -5,11 +5,12 @@
   import type { RateWindow, SubscriptionUsage, UsageOverview } from '../../lib/types';
   import Toggle from '../Toggle.svelte';
 
-  type Brand = 'claude' | 'chatgpt' | 'gemini' | 'other';
+  type Brand = 'claude' | 'chatgpt' | 'gemini' | 'grok' | 'other';
   const brands: { id: Brand; label: string; kind: string | null; vendor: string }[] = [
     { id: 'claude', label: 'Claude', kind: 'anthropic', vendor: 'Anthropic' },
     { id: 'chatgpt', label: 'ChatGPT', kind: 'openai', vendor: 'OpenAI' },
     { id: 'gemini', label: 'Gemini', kind: 'gemini', vendor: 'Google' },
+    { id: 'grok', label: 'Grok', kind: null, vendor: 'xAI' },
     { id: 'other', label: 'Other', kind: 'openai_compatible', vendor: 'OpenAI-compatible' },
   ];
 
@@ -19,7 +20,8 @@
   let busy = $state<string | null>(null);
 
   const current = $derived(brands.find((b) => b.id === brand)!);
-  const apiProviders = $derived(overview?.providers.filter((p) => p.kind === current.kind) ?? []);
+  // Providers of this brand: API keys and signed-in apps.
+  const apiProviders = $derived(overview?.providers.filter((p) => p.brand === brand) ?? []);
   const sub = $derived(overview?.subscriptions.find((s) => s.service === brand) ?? null);
 
   async function load() {
@@ -180,7 +182,7 @@
     <section class="block" aria-label="{p.name} API usage">
       <div class="row">
         <strong class="grow">{p.name}</strong>
-        <span class="xsmall sub-muted">API key{p.enabled ? '' : ' · signed out'}</span>
+        <span class="xsmall sub-muted">{p.bridge ? 'Signed-in app' : 'API key'}{p.enabled ? '' : ' · signed out'}</span>
       </div>
       {#if p.limits}
         {#each rateRows(p.limits) as [label, w] (label)}
@@ -208,6 +210,11 @@
           </div>
         {/each}
         <p class="xsmall sub-muted">Rate limits per minute, as of your last request.</p>
+      {:else if p.bridge}
+        <p class="small sub-muted">
+          Uses your {current.label} plan through the app you're signed in to. Turn on subscription sign-in below to see the
+          plan's limits.
+        </p>
       {:else if p.kind === 'gemini'}
         <p class="small sub-muted">
           The Gemini API doesn't report remaining limits. Check Google AI Studio for quotas.
@@ -306,6 +313,18 @@
     --b-track: #e9eef6;
     --b-font: 'Google Sans', 'Product Sans', 'Segoe UI', system-ui, sans-serif;
   }
+  .brand-grok {
+    --b-accent: #000000;
+    --b-fill: #0a0a0a;
+    --b-on: #fff;
+    --b-bg: #fafafa;
+    --b-card: #ffffff;
+    --b-border: #e4e4e4;
+    --b-text: #0a0a0a;
+    --b-muted: #6e6e6e;
+    --b-track: #ebebeb;
+    --b-font: 'Universal Sans', ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  }
   .brand-other {
     --b-accent: var(--accent);
     --b-fill: var(--accent);
@@ -337,6 +356,16 @@
       --b-muted: #a3a3a3;
       --b-track: #424242;
     }
+    :global(:root:not([data-theme='light'])) .brand-grok {
+      --b-fill: #ffffff;
+      --b-on: #0a0a0a;
+      --b-bg: #0a0a0a;
+      --b-card: #161616;
+      --b-border: #2a2a2a;
+      --b-text: #f2f2f2;
+      --b-muted: #9a9a9a;
+      --b-track: #2a2a2a;
+    }
     :global(:root:not([data-theme='light'])) .brand-gemini {
       --b-bg: #131314;
       --b-card: #1e1f20;
@@ -363,6 +392,16 @@
     --b-text: #ececec;
     --b-muted: #a3a3a3;
     --b-track: #424242;
+  }
+  :global(:root[data-theme='dark']) .brand-grok {
+    --b-fill: #ffffff;
+    --b-on: #0a0a0a;
+    --b-bg: #0a0a0a;
+    --b-card: #161616;
+    --b-border: #2a2a2a;
+    --b-text: #f2f2f2;
+    --b-muted: #9a9a9a;
+    --b-track: #2a2a2a;
   }
   :global(:root[data-theme='dark']) .brand-gemini {
     --b-bg: #131314;

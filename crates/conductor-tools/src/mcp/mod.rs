@@ -12,5 +12,6 @@ pub mod catalog;
 pub mod client;
 pub mod config;
 pub mod doctor;
+pub mod session;
 
 pub use config::{McpConfig, McpServer, Transport};

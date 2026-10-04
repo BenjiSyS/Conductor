@@ -26,6 +26,7 @@ pub mod git;
 pub mod mcp;
 pub mod package;
 pub mod plugins;
+mod process_lifetime;
 pub mod project;
 pub mod receipts;
 pub mod skills;

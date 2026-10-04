@@ -28,6 +28,10 @@
     await attempt(() => call('remove_provider', { id: p.id }));
     await refresh();
   }
+  // Signed-in apps reconnect without a key.
+  async function reconnectApp(p: Provider) {
+    if (await attempt(() => call('cli_bridge_connect', { cli: p.id.slice(4) }), `${p.name} connected`)) await refresh();
+  }
   async function refreshModels(p: Provider, apiKey: string | null) {
     const r = await attempt(() => call<Provider>('save_provider', { config: p, apiKey }), `${p.name} connected`);
     if (r) {
@@ -49,7 +53,9 @@
       <span class="dot" class:ok={p.enabled} class:bad={!p.enabled}></span>
       <div class="grow">
         <strong>{p.name}</strong>
-        <span class="xsmall muted">· {kindLabel[p.kind]} · {p.models.length} models</span>
+        <span class="xsmall muted"
+          >· {p.id.startsWith('cli-') ? 'Signed-in app' : kindLabel[p.kind]} · {p.models.length} models</span
+        >
         <p class="xsmall {p.enabled ? 'muted' : 'warn'}">
           {p.enabled ? 'Connected' : `${p.name} signed out — reconnect to continue.`}
         </p>
@@ -60,7 +66,9 @@
         >
         <button class="btn sm ghost" onclick={() => disconnect(p)}><Unplug size={13} /> Disconnect</button>
       {:else}
-        <button class="btn sm primary" onclick={() => (reconnect = p)}>Reconnect</button>
+        <button class="btn sm primary" onclick={() => (p.id.startsWith('cli-') ? reconnectApp(p) : (reconnect = p))}
+          >Reconnect</button
+        >
       {/if}
       <button class="btn sm ghost icon" aria-label="Remove {p.name}" onclick={() => remove(p)}
         ><Trash2 size={13} /></button

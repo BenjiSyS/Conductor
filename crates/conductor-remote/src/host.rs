@@ -100,10 +100,16 @@ impl HostHandle {
         ok
     }
 
-    /// Publish a state event to connected clients (filtered by project scope
-    /// when the event has a `project` field).
+    /// Publish a project-scoped state event. Private events without a known
+    /// project fail closed; they must never become host-wide broadcasts.
     pub fn publish(&self, event: Value) {
-        let _ = self.shared.events.send(event);
+        if event
+            .get("project")
+            .and_then(Value::as_str)
+            .is_some_and(|project| self.shared.projects.contains_key(project))
+        {
+            let _ = self.shared.events.send(event);
+        }
     }
 
     pub fn connected_clients(&self) -> usize {
@@ -468,10 +474,8 @@ async fn session(s: Arc<Shared>, socket: WebSocket, peer: SocketAddr) {
             }
             ev = events.recv() => match ev {
                 Ok(v) => {
-                    if let Some(p) = v.get("project").and_then(Value::as_str) {
-                        if !dev.projects.iter().any(|x| x == p) {
-                            continue;
-                        }
+                    if !event_visible(&v, &dev) {
+                        continue;
                     }
                     if tx.send(Message::Text(v.to_string().into())).await.is_err() {
                         break;
@@ -498,6 +502,14 @@ async fn session(s: Arc<Shared>, socket: WebSocket, peer: SocketAddr) {
                         let _ = tx.send(Message::Text(json!({ "type": "error", "error": "unknown message type" }).to_string().into())).await;
                         continue;
                     }
+                    let Some(project) = v.get("project").and_then(Value::as_str) else {
+                        let _ = tx.send(Message::Text(json!({ "type": "error", "error": "an authorized project is required" }).to_string().into())).await;
+                        continue;
+                    };
+                    if !dev.projects.iter().any(|allowed| allowed == project) || !s.projects.contains_key(project) {
+                        let _ = tx.send(Message::Text(json!({ "type": "error", "error": "this device has no access to that project" }).to_string().into())).await;
+                        continue;
+                    }
                     s.audit.log("client_action", Some(&dev.id), &kind, None);
                     let _ = s.inbound.try_send(Inbound { device_id: dev.id.clone(), device_name: dev.name.clone(), kind, payload: v });
                 }
@@ -517,6 +529,13 @@ async fn session(s: Arc<Shared>, socket: WebSocket, peer: SocketAddr) {
         .events
         .send(json!({ "type": "client_disconnected", "device": dev.name }));
     stop_idle_watchers(&s);
+}
+
+fn event_visible(event: &Value, device: &Device) -> bool {
+    event
+        .get("project")
+        .and_then(Value::as_str)
+        .is_some_and(|project| device.projects.iter().any(|allowed| allowed == project))
 }
 
 /// Watch files only while someone is connected (idle hosts stay light).
@@ -550,4 +569,36 @@ fn stop_idle_watchers(s: &Arc<Shared>) {
 
 async fn index() -> Html<&'static str> {
     Html(include_str!("web.html"))
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn private_events_require_exact_authorized_project_scope() {
+        let device = Device {
+            id: "fixture".into(),
+            name: "fixture".into(),
+            token_hash: String::new(),
+            projects: vec!["allowed".into()],
+            created: 0,
+            last_seen: None,
+            can_control: false,
+        };
+        assert!(event_visible(
+            &json!({"type":"delta","project":"allowed","text":"ok"}),
+            &device
+        ));
+        for event in [
+            json!({"type":"delta","text":"private"}),
+            json!({"project":null}),
+            json!({"project":[]} ),
+            json!({"project":"unshared"}),
+            json!({"project":""}),
+            json!({"project":"Allowed"}),
+        ] {
+            assert!(!event_visible(&event, &device));
+        }
+    }
 }

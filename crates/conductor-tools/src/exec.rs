@@ -13,9 +13,11 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
+
+use crate::process_lifetime::OwnedProcess;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecRequest {
@@ -114,6 +116,12 @@ pub async fn run(req: ExecRequest, cancel: CancellationToken) -> ExecResult {
         duration_ms: started.elapsed().as_millis(),
         redactions: 0,
     };
+    if cancel.is_cancelled() {
+        return ExecResult {
+            end: ExecEnd::Cancelled,
+            ..fail(String::new())
+        };
+    }
     let Some(exe) = resolve_program(&req.program) else {
         return fail(format!("'{}' was not found on PATH", req.program));
     };
@@ -129,66 +137,131 @@ pub async fn run(req: ExecRequest, cancel: CancellationToken) -> ExecResult {
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    {
-        // CREATE_NO_WINDOW: don't flash console windows from the GUI app.
-        cmd.creation_flags(0x0800_0000);
-    }
-    #[cfg(unix)]
-    {
-        // New process group so we can kill the whole tree.
-        cmd.process_group(0);
-    }
-    let mut child = match cmd.spawn() {
+        .stderr(Stdio::piped());
+    let mut process = match OwnedProcess::spawn(&mut cmd) {
         Ok(c) => c,
         Err(e) => return fail(format!("could not start '{}': {e}", req.program)),
     };
-    if let Some(input) = req.stdin.clone() {
-        if let Some(mut si) = child.stdin.take() {
-            tokio::spawn(async move {
-                use tokio::io::AsyncWriteExt;
-                let _ = si.write_all(input.as_bytes()).await;
-            });
-        }
-    }
-    let pid = child.id();
-    let out = child
-        .stdout
-        .take()
-        .map(|s| tokio::spawn(read_capped(s, req.max_output_bytes)));
-    let err = child
-        .stderr
-        .take()
-        .map(|s| tokio::spawn(read_capped(s, req.max_output_bytes)));
+    let out = match process.take_stdout() {
+        Ok(Some(stream)) => stream,
+        Ok(None) => return fail("spawned process has no stdout pipe".into()),
+        Err(error) => return fail(format!("could not register stdout pipe: {error}")),
+    };
+    let err = match process.take_stderr() {
+        Ok(Some(stream)) => stream,
+        Ok(None) => return fail("spawned process has no stderr pipe".into()),
+        Err(error) => return fail(format!("could not register stderr pipe: {error}")),
+    };
+    let stdin = match process.take_stdin() {
+        Ok(stream) => stream,
+        Err(error) => return fail(format!("could not register stdin pipe: {error}")),
+    };
     let timeout = req
         .timeout_secs
         .map(Duration::from_secs)
         .unwrap_or(Duration::from_secs(24 * 3600));
 
-    let (end, code) = tokio::select! {
-        status = child.wait() => match status {
-            Ok(s) => (ExecEnd::Exited, s.code()),
-            Err(_) => (ExecEnd::Exited, None),
-        },
-        _ = tokio::time::sleep(timeout) => {
-            kill_tree(pid, &mut child).await;
-            (ExecEnd::TimedOut, None)
+    let mut stdout = Captured::new(req.max_output_bytes);
+    let mut stderr = Captured::new(req.max_output_bytes);
+    // Inline I/O futures belong to this call. Abort drops their pipe handles
+    // and the owned process guard; no detached reader/writer tasks survive.
+    let mut out_reader = Box::pin(stdout.read(out));
+    let mut err_reader = Box::pin(stderr.read(err));
+    let mut input_writer = Box::pin(async move {
+        if let Some(mut stdin) = stdin {
+            if let Some(input) = req.stdin {
+                stdin.write_all(input.as_bytes()).await?;
+            }
+            stdin.shutdown().await?;
         }
-        _ = cancel.cancelled() => {
-            kill_tree(pid, &mut child).await;
-            (ExecEnd::Cancelled, None)
+        Ok::<(), std::io::Error>(())
+    });
+    let mut out_done = false;
+    let mut err_done = false;
+    let mut input_done = false;
+    let mut errors = Vec::new();
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    let mut completed = false;
+    let (mut end, mut code) = {
+        let wait = process.wait();
+        tokio::pin!(wait);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break (ExecEnd::Cancelled, None),
+                _ = &mut deadline => break (ExecEnd::TimedOut, None),
+                status = &mut wait => {
+                    break match status {
+                        Ok(status) => { completed = true; (ExecEnd::Exited, status.code()) },
+                        Err(error) => {
+                            errors.push(format!("process wait/cleanup failed: {error}"));
+                            (ExecEnd::Exited, None)
+                        }
+                    };
+                }
+                _ = &mut out_reader, if !out_done => out_done = true,
+                _ = &mut err_reader, if !err_done => err_done = true,
+                result = &mut input_writer, if !input_done => {
+                    input_done = true;
+                    if let Err(error) = result {
+                        errors.push(format!("process stdin write failed: {error}"));
+                    }
+                }
+            }
         }
     };
-    let (stdout, so_trunc) = match out {
-        Some(h) => h.await.unwrap_or_default(),
-        None => (String::new(), 0),
-    };
-    let (stderr, se_trunc) = match err {
-        Some(h) => h.await.unwrap_or_default(),
-        None => (String::new(), 0),
-    };
+    // A backpressured write cannot delay cleanup or retain stdin after exit.
+    drop(input_writer);
+    if !completed {
+        if let Err(error) = process.shutdown().await {
+            errors.push(format!("process tree cleanup failed: {error}"));
+        }
+    }
+    // Finite commands own their descendants until cleanup completes. Drain
+    // buffered output after writers close, but escaped/stuck writers cannot
+    // extend the call indefinitely. Timeout and cancellation still apply.
+    let drain = tokio::time::sleep(Duration::from_secs(1));
+    tokio::pin!(drain);
+    while !out_done || !err_done {
+        tokio::select! {
+            _ = &mut out_reader, if !out_done => out_done = true,
+            _ = &mut err_reader, if !err_done => err_done = true,
+            _ = cancel.cancelled(), if end == ExecEnd::Exited => {
+                end = ExecEnd::Cancelled;
+                code = None;
+                break;
+            }
+            _ = &mut deadline, if end == ExecEnd::Exited => {
+                end = ExecEnd::TimedOut;
+                code = None;
+                break;
+            }
+            _ = &mut drain => break,
+        }
+    }
+    drop(out_reader);
+    drop(err_reader);
+    if !out_done || !err_done {
+        errors.push("process output drain stopped before EOF; output may be incomplete".into());
+    }
+    if let Some(error) = stdout.error.take() {
+        errors.push(format!("process stdout read failed: {error}"));
+    }
+    if let Some(error) = stderr.error.take() {
+        errors.push(format!("process stderr read failed: {error}"));
+    }
+    let so_trunc = stdout.dropped;
+    let se_trunc = stderr.dropped;
+    let stdout = stdout.text();
+    let mut stderr = stderr.text();
+    if !errors.is_empty() {
+        // A cleanup/I/O failure cannot masquerade as a successful exit.
+        code = None;
+        if !stderr.is_empty() {
+            stderr.push('\n');
+        }
+        stderr.push_str(&errors.join("\n"));
+    }
     let ro = conductor_security::secrets::redact(&stdout);
     let re = conductor_security::secrets::redact(&stderr);
     ExecResult {
@@ -208,7 +281,7 @@ pub async fn run(req: ExecRequest, cancel: CancellationToken) -> ExecResult {
 /// with spaces work and metacharacters in arguments stay literal (quoted).
 /// Arguments containing `"`, `%` or line breaks are refused for shims because
 /// cmd.exe cannot pass them through safely.
-pub(crate) fn command_for(exe: &Path, args: &[String]) -> Result<Command, String> {
+pub fn command_for(exe: &Path, args: &[String]) -> Result<Command, String> {
     #[cfg(windows)]
     {
         let ext = exe
@@ -245,56 +318,51 @@ pub(crate) fn command_for(exe: &Path, args: &[String]) -> Result<Command, String
     Ok(c)
 }
 
-async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: usize) -> (String, usize) {
-    let mut buf = Vec::with_capacity(cap.min(64 * 1024));
-    let mut chunk = [0u8; 8192];
-    let mut dropped = 0usize;
-    loop {
-        match r.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                let room = cap.saturating_sub(buf.len());
-                if room >= n {
-                    buf.extend_from_slice(&chunk[..n]);
-                } else {
-                    buf.extend_from_slice(&chunk[..room]);
-                    dropped += n - room;
+struct Captured {
+    bytes: Vec<u8>,
+    cap: usize,
+    dropped: usize,
+    error: Option<std::io::Error>,
+}
+
+impl Captured {
+    fn new(cap: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(cap.min(64 * 1024)),
+            cap,
+            dropped: 0,
+            error: None,
+        }
+    }
+
+    async fn read<R: AsyncRead + Unpin>(&mut self, mut stream: R) {
+        let mut chunk = [0u8; 8192];
+        loop {
+            match stream.read(&mut chunk).await {
+                Ok(0) => break,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof
+                    ) =>
+                {
+                    break
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                    break;
+                }
+                Ok(n) => {
+                    let kept = n.min(self.cap.saturating_sub(self.bytes.len()));
+                    self.bytes.extend_from_slice(&chunk[..kept]);
+                    self.dropped = self.dropped.saturating_add(n - kept);
                 }
             }
         }
     }
-    (String::from_utf8_lossy(&buf).into_owned(), dropped)
-}
 
-async fn kill_tree(pid: Option<u32>, child: &mut tokio::process::Child) {
-    #[cfg(windows)]
-    if let Some(pid) = pid {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .creation_flags_compat()
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    #[cfg(unix)]
-    if let Some(pid) = pid {
-        // Negative pid = process group.
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", &format!("-{pid}")])
-            .status();
-    }
-    let _ = child.kill().await;
-}
-
-#[cfg(windows)]
-trait CreationFlagsCompat {
-    fn creation_flags_compat(&mut self) -> &mut Self;
-}
-#[cfg(windows)]
-impl CreationFlagsCompat for std::process::Command {
-    fn creation_flags_compat(&mut self) -> &mut Self {
-        use std::os::windows::process::CommandExt;
-        self.creation_flags(0x0800_0000)
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.bytes).into_owned()
     }
 }
 

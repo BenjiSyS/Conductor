@@ -568,6 +568,8 @@ pub async fn goal_start(state: State<'_, AppState>, id: String) -> CmdResult<()>
         StartDeps {
             providers: provs,
             secrets: Arc::new(|id: &str| paths::secret(id)),
+            integration_secrets: Arc::new(|name: &str| paths::integration_secret(name)),
+            integration_project_id: Some(rec.project_id.clone()),
             max_parallel: settings.performance.parallel_agents(),
             settings,
             combo,
@@ -637,6 +639,38 @@ pub async fn do_emergency_stop(state: &AppState) -> Value {
     state.tunnels.lock().await.close_all().await;
     tracing::warn!(chats, goals, "emergency stop");
     json!({ "chats": chats, "goals": goals })
+}
+
+/// A paired device's Stop applies only to its selected authorized project.
+/// Host-wide emergency stop remains a local action.
+async fn stop_project(state: &AppState, project_id: &str) {
+    if let Ok(runs) = state.runs.lock() {
+        for (id, token) in runs.iter() {
+            let conversation: Option<Conversation> =
+                state.store.get("conversation", id).ok().flatten();
+            if conversation.is_some_and(|conversation| conversation.project_id == project_id) {
+                token.cancel();
+            }
+        }
+    }
+    for goal in state
+        .goals
+        .list()
+        .into_iter()
+        .filter(|goal| goal.project_id == project_id)
+    {
+        state.goals.stop(&goal.id);
+    }
+    for request in state.approvals.pending() {
+        if request
+            .goal_id
+            .as_deref()
+            .and_then(|id| state.goals.get(id))
+            .is_some_and(|goal| goal.project_id == project_id)
+        {
+            state.approvals.resolve(&request.id, false);
+        }
+    }
 }
 
 // ---------- MCP ----------
@@ -1097,15 +1131,31 @@ pub async fn remote_start(
             tokio::spawn(async move {
                 use tauri::{Emitter, Manager};
                 while let Some(i) = inbound.recv().await {
+                    // The host checked this project against the paired device.
+                    // Resource identities must also resolve to that project.
+                    let Some(project_id) = i.payload.get("project").and_then(Value::as_str) else {
+                        continue;
+                    };
                     if i.kind == "stop" {
                         if let Some(st) = app2.try_state::<AppState>() {
-                            do_emergency_stop(&st).await;
+                            stop_project(&st, project_id).await;
                         }
                     } else if i.kind == "approval" {
                         if let (Some(st), Some(id)) = (
                             app2.try_state::<AppState>(),
                             i.payload.get("id").and_then(Value::as_str),
                         ) {
+                            let authorized = st
+                                .approvals
+                                .pending()
+                                .into_iter()
+                                .find(|request| request.id == id)
+                                .and_then(|request| request.goal_id)
+                                .and_then(|goal| st.goals.get(&goal))
+                                .is_some_and(|goal| goal.project_id == project_id);
+                            if !authorized {
+                                continue;
+                            }
                             st.approvals.resolve(
                                 id,
                                 i.payload
@@ -1113,6 +1163,32 @@ pub async fn remote_start(
                                     .and_then(Value::as_bool)
                                     .unwrap_or(false),
                             );
+                        }
+                    } else if i.kind == "answer" {
+                        let Some(st) = app2.try_state::<AppState>() else {
+                            continue;
+                        };
+                        if !i
+                            .payload
+                            .get("goal_id")
+                            .and_then(Value::as_str)
+                            .and_then(|id| st.goals.get(id))
+                            .is_some_and(|goal| goal.project_id == project_id)
+                        {
+                            continue;
+                        }
+                    } else if i.kind == "prompt" {
+                        if let Some(id) = i.payload.get("conversation_id").and_then(Value::as_str) {
+                            let Some(st) = app2.try_state::<AppState>() else {
+                                continue;
+                            };
+                            let conversation: Option<Conversation> =
+                                st.store.get("conversation", id).ok().flatten();
+                            if !conversation
+                                .is_some_and(|conversation| conversation.project_id == project_id)
+                            {
+                                continue;
+                            }
                         }
                     }
                     let _ = app2.emit("remote-inbound", &i);

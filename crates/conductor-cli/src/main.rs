@@ -644,6 +644,8 @@ async fn run_goal(
         StartDeps {
             providers: provs,
             secrets: Arc::new(|id: &str| paths::secret(id)),
+            integration_secrets: Arc::new(|name: &str| paths::integration_secret(name)),
+            integration_project_id: None,
             settings,
             combo,
             models: avail,

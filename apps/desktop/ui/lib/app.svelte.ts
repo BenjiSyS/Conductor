@@ -18,6 +18,7 @@ import type {
   Snapshot,
 } from './types';
 import { defaultSettings } from './types';
+import { ding } from './sound';
 
 export type View = 'home' | 'chat' | 'goal';
 export type SettingsTab =
@@ -477,6 +478,10 @@ export async function init() {
   });
   await onEngine(onEngineEvent);
   await listen<{ model: string; level: string; why: string }>('effort-request', (r) => (app.effortRequest = r));
+  // OS notifications come from the backend; the ding plays here (Settings › General).
+  await listen<{ title: string; body: string }>('notify', () => {
+    if (app.prefs?.notify_sound !== false) ding();
+  });
   await listen<{ chats: number; goals: number }>('emergency-stop', () =>
     toast('Emergency stop: all active work halted.', 'success'),
   );

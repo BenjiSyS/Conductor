@@ -53,6 +53,8 @@ pub struct GoalSummary {
 pub struct StartDeps {
     pub providers: Vec<ProviderConfig>,
     pub secrets: SecretFn,
+    pub integration_secrets: SecretFn,
+    pub integration_project_id: Option<String>,
     pub settings: Settings,
     pub combo: Combo,
     pub models: Vec<ModelProfile>,
@@ -248,8 +250,11 @@ impl GoalService {
             let env = Arc::new(AgentEnv {
                 providers: deps.providers,
                 secrets: deps.secrets,
+                integration_secrets: deps.integration_secrets,
                 settings: deps.settings,
                 project_root: record.project_root.clone(),
+                data_dir: svc.dir.parent().unwrap_or(&svc.dir).to_path_buf(),
+                integration_project_id: deps.integration_project_id,
                 approver: deps.approver,
                 events: svc.events.clone(),
                 goal_id: Some(id.clone()),
@@ -363,14 +368,66 @@ impl GoalService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::tests::{provider, Script};
+    use crate::agent::tests::provider;
     use crate::approvals::Fixed;
     use conductor_core::domain::PermissionLevel;
     use conductor_orchestrator::combo::ComboMember;
     use conductor_orchestrator::goal::DoneCheck;
     use conductor_orchestrator::roles::Role;
     use wiremock::matchers::method;
-    use wiremock::{Mock, MockServer};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    #[derive(Clone)]
+    struct GoalCaptureScript {
+        steps: Arc<std::sync::Mutex<Vec<String>>>,
+        requests: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    }
+    impl Respond for GoalCaptureScript {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            self.requests
+                .lock()
+                .unwrap()
+                .push(serde_json::from_slice(request.body.as_slice()).unwrap());
+            let text = self.steps.lock().unwrap().remove(0);
+            let delta = serde_json::json!({"choices":[{"delta":{"content":text}}]});
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(format!("data: {delta}\n\ndata: [DONE]\n\n"))
+        }
+    }
+
+    #[derive(Clone)]
+    struct GoalMcpFixture(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Respond for GoalMcpFixture {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            assert_eq!(request.headers["x-goal-secret"], "goal-vault-fixture");
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let result = match body["method"].as_str().unwrap() {
+                "initialize" => serde_json::json!({
+                    "protocolVersion":"2025-06-18", "capabilities":{"tools":{}},
+                    "serverInfo":{"name":"goal-fixture", "version":"1"}
+                }),
+                "notifications/initialized" => return ResponseTemplate::new(202),
+                "tools/list" => serde_json::json!({"tools":[{
+                    "name":"greeting", "description":"Goal fixture", "inputSchema":{"type":"object"}
+                }]}),
+                "tools/call" => {
+                    assert_eq!(body["params"]["name"], "greeting");
+                    assert_eq!(
+                        body["params"]["arguments"],
+                        serde_json::json!({"name":"world"})
+                    );
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    serde_json::json!({"content":[{"type":"text","text":"GOAL_MCP_MARKER"}]})
+                }
+                other => panic!("Unexpected Goal MCP method: {other}"),
+            };
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc":"2.0", "id":body["id"], "result":result
+            }))
+        }
+    }
 
     async fn git_repo(root: &Path) {
         let g = conductor_tools::git::Git::new(root);
@@ -385,18 +442,62 @@ mod tests {
     #[tokio::test]
     async fn goal_runs_end_to_end_with_tools_checkpoint_and_test_gate() {
         let server = MockServer::start().await;
+        let mcp = MockServer::start().await;
+        let mcp_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        Mock::given(method("POST"))
+            .respond_with(GoalMcpFixture(mcp_calls.clone()))
+            .mount(&mcp)
+            .await;
         let plan = r#"{"tasks":[{"id":"code","title":"Create the greeting file","role":"coder","important":false}]}"#;
-        let script = Script(std::sync::Mutex::new(vec![
-            plan.to_string(),
-            "<write_file path=\"greeting.txt\">hello world\n</write_file>".into(),
-            "<done>Wrote greeting.txt</done>".into(),
-        ]));
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let script = GoalCaptureScript {
+            steps: Arc::new(std::sync::Mutex::new(vec![
+                plan.to_string(),
+                "<mcp_call server=\"goal-fixture\" tool=\"greeting\">{\"name\":\"world\"}</mcp_call>".into(),
+                "<write_file path=\"greeting.txt\">hello world\n</write_file>".into(),
+                "<done>Wrote greeting.txt</done>".into(),
+            ])),
+            requests: requests.clone(),
+        };
         Mock::given(method("POST"))
             .respond_with(script)
             .mount(&server)
             .await;
         let data = tempfile::tempdir().unwrap();
         let proj = tempfile::tempdir().unwrap();
+        let mut mcp_config = conductor_tools::mcp::config::McpConfig::default();
+        mcp_config
+            .upsert(conductor_tools::mcp::config::McpServer {
+                name: "goal-fixture".into(),
+                transport: conductor_tools::mcp::config::Transport::Http {
+                    url: mcp.uri(),
+                    headers: std::collections::BTreeMap::from([(
+                        "x-goal-secret".into(),
+                        conductor_tools::mcp::config::EnvValue::Secret {
+                            secret: "goal-token".into(),
+                        },
+                    )]),
+                },
+                enabled: true,
+                description: "Goal integration fixture".into(),
+                source: "test".into(),
+                version: None,
+                project: Some("p1".into()),
+                providers: vec!["openai".into()],
+            })
+            .unwrap();
+        mcp_config.save(&data.path().join("mcp.json")).unwrap();
+        let skill_source = data.path().join("goal-skill");
+        std::fs::create_dir_all(&skill_source).unwrap();
+        std::fs::write(skill_source.join("skill.toml"), "name='goal-greeting'\nversion='1'\ndescription='goal greeting'\nkeywords=['greeting']\n").unwrap();
+        std::fs::write(
+            skill_source.join("SKILL.md"),
+            "goal path skill instruction fixture",
+        )
+        .unwrap();
+        conductor_tools::skills::Skills::new(data.path().join("skills"))
+            .install_dir(&skill_source)
+            .unwrap();
         git_repo(proj.path()).await;
         let (tx, mut rx) = broadcast::channel(512);
         let svc = GoalService::new(data.path(), tx);
@@ -426,6 +527,11 @@ mod tests {
             StartDeps {
                 providers: vec![p],
                 secrets: crate::agent::map_secrets(Default::default()),
+                integration_secrets: crate::agent::map_secrets(HashMap::from([(
+                    "goal-token".into(),
+                    "goal-vault-fixture".into(),
+                )])),
+                integration_project_id: Some("p1".into()),
                 settings: Settings {
                     permission: PermissionLevel::FullAccess,
                     ..Default::default()
@@ -446,6 +552,8 @@ mod tests {
                 StartDeps {
                     providers: vec![],
                     secrets: crate::agent::map_secrets(Default::default()),
+                    integration_secrets: crate::agent::map_secrets(Default::default()),
+                    integration_project_id: Some("p1".into()),
                     settings: Settings::default(),
                     combo: Combo::new(
                         "x",
@@ -496,6 +604,25 @@ mod tests {
         assert!(r.goal.checks.iter().any(|c| c.passed));
         assert_eq!(svc.list()[0].state, GoalState::Complete);
         assert!(!svc.is_running(&rec.goal.id));
+        assert_eq!(mcp_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let captured = requests.lock().unwrap();
+        assert!(
+            captured[2].to_string().contains("GOAL_MCP_MARKER"),
+            "MCP output must reach Goal's next model request before its file write"
+        );
+        assert!(
+            !captured
+                .iter()
+                .any(|r| r.to_string().contains("goal-vault-fixture")),
+            "Integration credential must not reach the model"
+        );
+        drop(captured);
+        assert!(
+            requests.lock().unwrap().iter().any(|r| r
+                .to_string()
+                .contains("goal path skill instruction fixture")),
+            "Goal's agent request must include selected skills"
+        );
     }
 
     #[tokio::test]

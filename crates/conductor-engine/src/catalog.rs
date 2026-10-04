@@ -15,8 +15,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CatalogRule {
     pub provider: ProviderKind,
-    /// Model id prefix (lowercase).
+    /// Model id prefix (lowercase), unless `exact` is set.
     pub prefix: String,
+    /// Match only this alias or exact snapshot id.
+    #[serde(default)]
+    pub exact: bool,
     #[serde(default)]
     pub exclude: Vec<String>,
     pub efforts: Vec<String>,
@@ -33,33 +36,36 @@ pub struct Catalog {
 }
 
 pub fn builtin() -> Catalog {
-    let r = |prefix: &str, exclude: &[&str], efforts: &[&str]| CatalogRule {
+    let exact = |model: &str, efforts: &[&str]| CatalogRule {
         provider: ProviderKind::Openai,
-        prefix: prefix.into(),
-        exclude: exclude.iter().map(|s| s.to_string()).collect(),
+        prefix: model.into(),
+        exact: true,
+        exclude: vec![],
         efforts: efforts.iter().map(|s| s.to_string()).collect(),
-        vision: None,
+        vision: Some(true),
         tools: Some(true),
     };
     Catalog {
         version: "2026.10-builtin".into(),
         rules: vec![
-            // OpenAI reasoning models accept `reasoning.effort`.
-            r(
-                "gpt-5",
-                &[
-                    "chat",
-                    "audio",
-                    "realtime",
-                    "search",
-                    "image",
-                    "transcribe",
-                    "tts",
-                ],
-                &["minimal", "low", "medium", "high"],
-            ),
-            r("o3", &["audio", "realtime"], &["low", "medium", "high"]),
-            r("o4-mini", &[], &["low", "medium", "high"]),
+            // Exact aliases and documented snapshots only. Unknown future IDs
+            // retain only capabilities returned by the provider.
+            exact("gpt-5", &["minimal", "low", "medium", "high"]),
+            exact("gpt-5-2025-08-07", &["minimal", "low", "medium", "high"]),
+            exact("gpt-5-mini", &[]),
+            exact("gpt-5-mini-2025-08-07", &[]),
+            exact("gpt-5-nano", &[]),
+            exact("gpt-5-nano-2025-08-07", &[]),
+            exact("gpt-5-pro", &["high"]),
+            exact("gpt-5-pro-2025-10-06", &["high"]),
+            exact("gpt-5.1", &["none", "low", "medium", "high"]),
+            exact("gpt-5.1-2025-11-13", &["none", "low", "medium", "high"]),
+            // The model pages document image input and function calling, but
+            // do not establish allowed effort lists for these models.
+            exact("o3", &[]),
+            exact("o3-2025-04-16", &[]),
+            exact("o4-mini", &[]),
+            exact("o4-mini-2025-04-16", &[]),
         ],
     }
 }
@@ -92,8 +98,13 @@ pub fn enrich(catalog: &Catalog, config: &mut ProviderConfig) {
 fn apply(catalog: &Catalog, kind: &ProviderKind, m: &mut Model) {
     let id = m.id.to_lowercase();
     for rule in &catalog.rules {
+        let matches = if rule.exact {
+            id == rule.prefix
+        } else {
+            id.starts_with(&rule.prefix)
+        };
         if &rule.provider == kind
-            && id.starts_with(&rule.prefix)
+            && matches
             && !rule.exclude.iter().any(|x| id.contains(x.as_str()))
         {
             if m.efforts.is_empty() {
@@ -139,14 +150,18 @@ mod tests {
     fn enriches_only_matching_models() {
         let mut c = cfg(
             ProviderKind::Openai,
-            &["gpt-5-mini", "gpt-5-chat-latest", "gpt-4o"],
+            &["gpt-5", "gpt-5-chat-latest", "gpt-4o"],
         );
         enrich(&builtin(), &mut c);
         assert_eq!(
             c.models[0].efforts,
             vec!["minimal", "low", "medium", "high"]
         );
+        assert!(c.models[0].vision);
+        assert!(c.models[0].tools);
         assert!(c.models[1].efforts.is_empty(), "chat variant excluded");
+        assert!(!c.models[1].vision, "ChatGPT-only alias is not enriched");
+        assert!(!c.models[1].tools, "unknown model tools remain unknown");
         assert!(
             c.models[2].efforts.is_empty(),
             "non-reasoning model untouched"
@@ -157,6 +172,75 @@ mod tests {
             a.models[0].efforts.is_empty(),
             "rules are provider-specific"
         );
+    }
+
+    #[test]
+    fn exact_gpt5_rules_distinguish_efforts_snapshots_and_unknown_ids() {
+        let mut c = cfg(
+            ProviderKind::Openai,
+            &[
+                "gpt-5-mini",
+                "gpt-5-pro-2025-10-06",
+                "gpt-5.1-2025-11-13",
+                "gpt-5.10",
+                "gpt-5-future",
+                "gpt-5-codex",
+            ],
+        );
+        enrich(&builtin(), &mut c);
+
+        assert!(
+            c.models[0].efforts.is_empty(),
+            "no mini effort rule without explicit model documentation"
+        );
+        assert_eq!(c.models[1].efforts, vec!["high"]);
+        assert_eq!(c.models[2].efforts, vec!["none", "low", "medium", "high"]);
+        assert!(c.models[0].vision && c.models[0].tools);
+        for model in &c.models[3..] {
+            assert!(model.efforts.is_empty());
+            assert!(!model.vision);
+            assert!(!model.tools);
+        }
+    }
+
+    #[test]
+    fn enrichment_preserves_provider_reported_metadata() {
+        let mut c = cfg(ProviderKind::Openai, &["gpt-5", "gpt-5-pro"]);
+        c.models[0].efforts = vec!["provider-level".into()];
+        c.models[0].vision = true;
+        c.models[0].tools = true;
+        enrich(&builtin(), &mut c);
+        assert_eq!(c.models[0].efforts, vec!["provider-level"]);
+        assert!(c.models[0].vision && c.models[0].tools);
+        assert_eq!(c.models[1].efforts, vec!["high"]);
+    }
+
+    #[test]
+    fn o3_and_o4_mini_rules_match_only_documented_ids() {
+        let mut c = cfg(
+            ProviderKind::Openai,
+            &[
+                "o3",
+                "o3-2025-04-16",
+                "o3-future",
+                "o3-pro-unlisted",
+                "o4-mini",
+                "o4-mini-2025-04-16",
+                "o4-mini-future",
+            ],
+        );
+        enrich(&builtin(), &mut c);
+
+        for index in [0, 1, 4, 5] {
+            assert!(c.models[index].efforts.is_empty());
+            assert!(c.models[index].vision);
+            assert!(c.models[index].tools);
+        }
+        for index in [2, 3, 6] {
+            assert!(c.models[index].efforts.is_empty());
+            assert!(!c.models[index].vision);
+            assert!(!c.models[index].tools);
+        }
     }
 
     #[test]

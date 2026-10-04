@@ -9,13 +9,19 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 
+use crate::process_lifetime::OwnedProcess;
+
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
+pub(crate) const MAX_FRAME: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_TOOLS: usize = 1000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpError {
+    #[error("MCP operation cancelled")]
+    Cancelled,
     #[error("could not start MCP server: {0}")]
     Spawn(String),
     #[error("MCP server did not respond within {0}s")]
@@ -45,11 +51,12 @@ pub struct ServerInfo {
 }
 
 pub struct McpClient {
-    child: Child,
+    process: OwnedProcess,
     stdin: Mutex<ChildStdin>,
     stdout: Mutex<BufReader<ChildStdout>>,
     next_id: AtomicU64,
     timeout: Duration,
+    operation: Mutex<()>,
     pub server: Option<ServerInfo>,
     stderr_tail: std::sync::Arc<std::sync::Mutex<String>>,
 }
@@ -74,19 +81,21 @@ impl McpClient {
         if let Some(c) = cwd {
             cmd.current_dir(c);
         }
-        #[cfg(windows)]
-        cmd.creation_flags(0x0800_0000);
-        let mut child = cmd.spawn().map_err(|e| McpError::Spawn(e.to_string()))?;
-        let stdin = child
-            .stdin
-            .take()
+        let mut process =
+            OwnedProcess::spawn(&mut cmd).map_err(|e| McpError::Spawn(e.to_string()))?;
+        let stdin = process
+            .take_stdin()
+            .map_err(|e| McpError::Spawn(e.to_string()))?
             .ok_or_else(|| McpError::Spawn("no stdin".into()))?;
-        let stdout = child
-            .stdout
-            .take()
+        let stdout = process
+            .take_stdout()
+            .map_err(|e| McpError::Spawn(e.to_string()))?
             .ok_or_else(|| McpError::Spawn("no stdout".into()))?;
         let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-        if let Some(mut se) = child.stderr.take() {
+        if let Some(mut se) = process
+            .take_stderr()
+            .map_err(|e| McpError::Spawn(e.to_string()))?
+        {
             let tail = stderr_tail.clone();
             tokio::spawn(async move {
                 let mut buf = [0u8; 4096];
@@ -108,11 +117,12 @@ impl McpClient {
             });
         }
         Ok(Self {
-            child,
+            process,
             stdin: Mutex::new(stdin),
             stdout: Mutex::new(BufReader::new(stdout)),
             next_id: AtomicU64::new(1),
             timeout: Duration::from_secs(timeout_secs),
+            operation: Mutex::new(()),
             server: None,
             stderr_tail,
         })
@@ -127,6 +137,9 @@ impl McpClient {
 
     async fn send(&self, msg: &Value) -> Result<(), McpError> {
         let mut line = serde_json::to_vec(msg).map_err(|e| McpError::Protocol(e.to_string()))?;
+        if line.len() > MAX_FRAME {
+            return Err(McpError::Protocol("request exceeds 2 MiB".into()));
+        }
         line.push(b'\n');
         let mut w = self.stdin.lock().await;
         w.write_all(&line)
@@ -138,18 +151,27 @@ impl McpClient {
     }
 
     async fn request(&self, method: &str, params: Value) -> Result<Value, McpError> {
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
-            .await?;
         let fut = async {
+            let _operation = self.operation.lock().await;
+            let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+            self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+                .await?;
             let mut r = self.stdout.lock().await;
-            let mut line = String::new();
+            let mut line = Vec::new();
+            let mut total = 0usize;
             loop {
                 line.clear();
-                let n = r
-                    .read_line(&mut line)
+                let n = (&mut *r)
+                    .take((MAX_FRAME + 1) as u64)
+                    .read_until(b'\n', &mut line)
                     .await
                     .map_err(|e| McpError::Closed(format!(": {e}")))?;
+                total += n;
+                if n > MAX_FRAME || total > 4 * MAX_FRAME {
+                    return Err(McpError::Protocol(
+                        "response exceeds bounded frame budget".into(),
+                    ));
+                }
                 if n == 0 {
                     let tail = self.stderr_tail();
                     return Err(McpError::Closed(if tail.trim().is_empty() {
@@ -158,7 +180,7 @@ impl McpClient {
                         format!(": {}", last_lines(&tail, 5))
                     }));
                 }
-                let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+                let Ok(v) = serde_json::from_slice::<Value>(&line) else {
                     // Servers sometimes log to stdout; ignore non-JSON lines.
                     continue;
                 };
@@ -166,17 +188,7 @@ impl McpClient {
                     // Notification or server->client request; ignore.
                     continue;
                 }
-                if let Some(err) = v.get("error") {
-                    return Err(McpError::Rpc {
-                        code: err.get("code").and_then(Value::as_i64).unwrap_or(0),
-                        message: err
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string(),
-                    });
-                }
-                return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+                return rpc_result(v, id);
             }
         };
         tokio::time::timeout(self.timeout, fut)
@@ -212,8 +224,13 @@ impl McpClient {
                 .unwrap_or("")
                 .to_string(),
         };
-        self.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
-            .await?;
+        validate_protocol(&info.protocol_version)?;
+        tokio::time::timeout(
+            self.timeout,
+            self.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })),
+        )
+        .await
+        .map_err(|_| McpError::Timeout(self.timeout.as_secs()))??;
         self.server = Some(info.clone());
         Ok(info)
     }
@@ -221,25 +238,39 @@ impl McpClient {
     pub async fn list_tools(&self) -> Result<Vec<ToolInfo>, McpError> {
         let mut out = Vec::new();
         let mut cursor: Option<String> = None;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut total_bytes = 0;
         for _ in 0..50 {
             let params = match &cursor {
                 Some(c) => json!({ "cursor": c }),
                 None => json!({}),
             };
             let r = self.request("tools/list", params).await?;
-            let tools: Vec<ToolInfo> =
-                serde_json::from_value(r.get("tools").cloned().unwrap_or(json!([])))
-                    .map_err(|e| McpError::Protocol(e.to_string()))?;
+            total_bytes += serde_json::to_vec(&r)
+                .map_err(|e| McpError::Protocol(e.to_string()))?
+                .len();
+            if total_bytes > MAX_FRAME {
+                return Err(McpError::Protocol("tool catalog exceeds 2 MiB".into()));
+            }
+            let tools: Vec<ToolInfo> = serde_json::from_value(
+                r.get("tools")
+                    .cloned()
+                    .ok_or_else(|| McpError::Protocol("missing tool catalog".into()))?,
+            )
+            .map_err(|e| McpError::Protocol(e.to_string()))?;
             out.extend(tools);
-            cursor = r
-                .get("nextCursor")
-                .and_then(Value::as_str)
-                .map(String::from);
+            if out.len() > MAX_TOOLS {
+                return Err(McpError::Protocol("tool catalog exceeds 1000 tools".into()));
+            }
+            cursor = page_cursor(&r)?;
             if cursor.is_none() {
-                break;
+                return Ok(out);
+            }
+            if !seen.insert(cursor.clone().unwrap()) {
+                return Err(McpError::Protocol("repeated tools/list cursor".into()));
             }
         }
-        Ok(out)
+        Err(McpError::Protocol("tool catalog exceeds 50 pages".into()))
     }
 
     /// Call a tool; returns concatenated text content and the error flag.
@@ -254,33 +285,86 @@ impl McpClient {
                 json!({ "name": name, "arguments": arguments }),
             )
             .await?;
-        let is_error = r.get("isError").and_then(Value::as_bool).unwrap_or(false);
-        let mut text = String::new();
-        if let Some(items) = r.get("content").and_then(Value::as_array) {
-            for it in items {
-                match it.get("type").and_then(Value::as_str) {
-                    Some("text") => {
-                        if !text.is_empty() {
-                            text.push('\n');
-                        }
-                        text.push_str(it.get("text").and_then(Value::as_str).unwrap_or(""));
-                    }
-                    Some(other) => text.push_str(&format!("\n[{other} content omitted]")),
-                    None => {}
-                }
-            }
-        }
-        Ok((text, is_error))
+        tool_result(&r)
     }
 
     pub async fn shutdown(mut self) {
-        let _ = self.child.kill().await;
+        if let Err(error) = self.process.shutdown().await {
+            tracing::warn!(%error, "could not shut down owned MCP process tree");
+        }
     }
 }
 
 fn last_lines(s: &str, n: usize) -> String {
     let v: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
     v[v.len().saturating_sub(n)..].join(" | ")
+}
+
+pub(crate) fn validate_protocol(version: &str) -> Result<(), McpError> {
+    if matches!(version, "2025-06-18" | "2025-03-26" | "2024-11-05") {
+        Ok(())
+    } else {
+        Err(McpError::Protocol(
+            "unsupported negotiated protocol version".into(),
+        ))
+    }
+}
+
+pub(crate) fn rpc_result(value: Value, id: u64) -> Result<Value, McpError> {
+    if value.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || value.get("id").and_then(Value::as_u64) != Some(id)
+        || value.get("error").is_some() == value.get("result").is_some()
+    {
+        return Err(McpError::Protocol("invalid JSON-RPC response".into()));
+    }
+    if let Some(err) = value.get("error") {
+        return Err(McpError::Rpc {
+            code: err.get("code").and_then(Value::as_i64).unwrap_or(0),
+            message: err
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .into(),
+        });
+    }
+    Ok(value.get("result").cloned().unwrap())
+}
+
+pub(crate) fn page_cursor(value: &Value) -> Result<Option<String>, McpError> {
+    match value.get("nextCursor") {
+        None => Ok(None),
+        Some(Value::String(s)) if !s.is_empty() && s.len() <= 8192 => Ok(Some(s.clone())),
+        _ => Err(McpError::Protocol("invalid tools/list cursor".into())),
+    }
+}
+
+pub(crate) fn tool_result(value: &Value) -> Result<(String, bool), McpError> {
+    let error = match value.get("isError") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        _ => return Err(McpError::Protocol("invalid tool error flag".into())),
+    };
+    let items = value
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or_else(|| McpError::Protocol("missing tool content".into()))?;
+    let mut text = Vec::new();
+    for item in items {
+        match item.get("type").and_then(Value::as_str) {
+            Some("text") => text.push(
+                item.get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| McpError::Protocol("invalid text content".into()))?
+                    .to_owned(),
+            ),
+            Some(_) => text.push("[non-text content omitted]".into()),
+            None => return Err(McpError::Protocol("invalid content type".into())),
+        }
+    }
+    if let Some(structured) = value.get("structuredContent") {
+        text.push(structured.to_string());
+    }
+    Ok((text.join("\n"), error))
 }
 
 #[cfg(test)]

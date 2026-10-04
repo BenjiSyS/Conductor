@@ -11,6 +11,8 @@ pub enum Capability {
     GitRead,
     GitWrite,
     Network,
+    Mcp,
+    SecretsUse,
     Browser,
     Computer,
     Install,
@@ -26,6 +28,8 @@ impl Capability {
             Self::GitRead => "git.read",
             Self::GitWrite => "git.write",
             Self::Network => "network",
+            Self::Mcp => "mcp",
+            Self::SecretsUse => "secrets.use",
             Self::Browser => "browser",
             Self::Computer => "computer.control",
             Self::Install => "install.software",
@@ -75,6 +79,8 @@ mod tests {
             Capability::Terminal,
             Capability::GitWrite,
             Capability::Computer,
+            Capability::Mcp,
+            Capability::SecretsUse,
         ] {
             assert!(matches!(
                 authorize(Mode::Plan, &settings, cap, true),

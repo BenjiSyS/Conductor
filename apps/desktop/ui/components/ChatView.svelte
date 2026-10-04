@@ -92,7 +92,7 @@
     {#each conv?.messages ?? [] as m (m.id)}
       <article class="msg {m.role}" aria-label="{m.role} message">
         {#if m.role === 'user'}
-          <div class="bubble">{m.text}</div>
+          <div class="bubble">{m.text.replace(/ · paste:[0-9a-f]{32}]/g, ']')}</div>
         {:else}
           <div class="who">
             <span class="model">{m.provider ? modelLabel(m.provider) : 'Assistant'}</span>

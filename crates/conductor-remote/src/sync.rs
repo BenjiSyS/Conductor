@@ -1,8 +1,10 @@
 //! Hash-versioned file access and change streaming.
 
 use std::collections::{HashMap, VecDeque};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use conductor_security::paths::PathGuard;
@@ -36,10 +38,131 @@ pub enum SyncError {
 }
 
 pub const MAX_TEXT: u64 = 2 * 1024 * 1024;
+const WATCH_HASH_CHUNK: usize = 64 * 1024;
+const WATCH_TEXT_LIMIT: usize = 256 * 1024;
+
+static WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn path_write_lock() -> MutexGuard<'static, ()> {
+    WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn read_text_bounded(path: &Path) -> Result<Vec<u8>, SyncError> {
+    let file = File::open(path)?;
+    let size = file.metadata()?.len();
+    if size > MAX_TEXT {
+        return Err(SyncError::TooLarge);
+    }
+    let mut bytes = Vec::with_capacity(size.min(MAX_TEXT) as usize);
+    file.take(MAX_TEXT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_TEXT {
+        return Err(SyncError::TooLarge);
+    }
+    Ok(bytes)
+}
+
+fn current_hash(path: &Path) -> Result<Option<String>, SyncError> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut bytes = Vec::with_capacity(file.metadata()?.len().min(MAX_TEXT) as usize);
+    file.take(MAX_TEXT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_TEXT {
+        return Err(SyncError::TooLarge);
+    }
+    Ok(Some(content_hash(&bytes)))
+}
+
+fn watch_hash_and_text(path: &Path) -> std::io::Result<(String, Option<String>)> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut content = Vec::with_capacity(WATCH_TEXT_LIMIT);
+    let mut size = 0usize;
+    let mut keep_text = true;
+    let mut buffer = [0u8; WATCH_HASH_CHUNK];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let chunk = &buffer[..read];
+        hasher.update(chunk);
+        size = size.saturating_add(read);
+        if keep_text && size <= WATCH_TEXT_LIMIT && !chunk.contains(&0) {
+            content.extend_from_slice(chunk);
+        } else {
+            keep_text = false;
+            content.clear();
+        }
+    }
+    let text = keep_text.then(|| String::from_utf8_lossy(&content).into_owned());
+    Ok((hex::encode(hasher.finalize()), text))
+}
+
+struct OwnedTemp {
+    path: PathBuf,
+    file: Option<File>,
+}
+
+impl OwnedTemp {
+    fn create(parent: &Path) -> Result<Self, SyncError> {
+        for _ in 0..8 {
+            let path = parent.join(format!(
+                ".conductor-tmp-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => {
+                    return Ok(Self {
+                        path,
+                        file: Some(file),
+                    })
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not create a unique remote-write temporary file",
+        )
+        .into())
+    }
+
+    fn write_all_and_sync(&mut self, content: &[u8]) -> Result<(), SyncError> {
+        let file = self.file.as_mut().expect("owned temp file is open");
+        file.write_all(content)?;
+        file.sync_all()?;
+        self.file.take();
+        Ok(())
+    }
+
+    fn replace(mut self, destination: &Path) -> Result<(), SyncError> {
+        std::fs::rename(&self.path, destination)?;
+        self.file.take();
+        self.path.clear();
+        Ok(())
+    }
+}
+
+impl Drop for OwnedTemp {
+    fn drop(&mut self) {
+        self.file.take();
+        if !self.path.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
 
 pub fn read(guard: &PathGuard, rel: &str) -> Result<FileVersion, SyncError> {
     let p = guard.resolve_read(rel)?;
-    let bytes = std::fs::read(&p)?;
+    let bytes = read_text_bounded(&p)?;
     let size = bytes.len() as u64;
     let hash = content_hash(&bytes);
     let content = if size <= MAX_TEXT && !bytes.iter().take(8000).any(|b| *b == 0) {
@@ -56,18 +179,31 @@ pub fn read(guard: &PathGuard, rel: &str) -> Result<FileVersion, SyncError> {
 }
 
 /// Write `content` only if the file's current hash equals `base_hash`
-/// (`None` = the file must not exist yet). Never overwrites concurrent edits.
+/// (`None` = the file must not exist yet). Host-process writes serialize and
+/// recheck immediately before replacement. Uncoordinated external editors can
+/// still modify the file between that final check and the atomic rename.
 pub fn write(
     guard: &PathGuard,
     rel: &str,
     content: &str,
     base_hash: Option<&str>,
 ) -> Result<FileVersion, SyncError> {
+    write_with_hook(guard, rel, content, base_hash, || {})
+}
+
+fn write_with_hook(
+    guard: &PathGuard,
+    rel: &str,
+    content: &str,
+    base_hash: Option<&str>,
+    before_final_check: impl FnOnce(),
+) -> Result<FileVersion, SyncError> {
     if content.len() as u64 > MAX_TEXT {
         return Err(SyncError::TooLarge);
     }
     let p = guard.resolve_write(rel)?;
-    let current = std::fs::read(&p).ok().map(|b| content_hash(&b));
+    let _lock = path_write_lock();
+    let current = current_hash(&p)?;
     match (current.as_deref(), base_hash) {
         (None, None) => {}
         (Some(c), Some(b)) if c == b => {}
@@ -81,9 +217,27 @@ pub fn write(
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = p.with_extension(format!("conductor-tmp-{}", std::process::id()));
-    std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, &p)?;
+    let parent = p.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination has no parent",
+        )
+    })?;
+    let mut tmp = OwnedTemp::create(parent)?;
+    tmp.write_all_and_sync(content.as_bytes())?;
+    before_final_check();
+    let current = current_hash(&p)?;
+    match (current.as_deref(), base_hash) {
+        (None, None) => {}
+        (Some(c), Some(b)) if c == b => {}
+        (cur, exp) => {
+            return Err(SyncError::Conflict {
+                current: cur.unwrap_or("missing").to_string(),
+                expected: exp.unwrap_or("missing").to_string(),
+            })
+        }
+    }
+    tmp.replace(&p)?;
     Ok(FileVersion {
         path: guard.relative(&p),
         hash: content_hash(content.as_bytes()),
@@ -218,11 +372,8 @@ pub fn watch(
                 let Some((rel, _)) = pending.remove(&p) else {
                     continue;
                 };
-                let change = match std::fs::read(&p) {
-                    Ok(bytes) if p.is_file() => {
-                        let hash = content_hash(&bytes);
-                        let text = (bytes.len() < 256 * 1024 && !bytes.contains(&0))
-                            .then(|| String::from_utf8_lossy(&bytes).into_owned());
+                let change = match p.is_file().then(|| watch_hash_and_text(&p)) {
+                    Some(Ok((hash, text))) => {
                         let mut c = cache.lock().expect("cache lock");
                         let diff = match (&text, c.map.get(&p)) {
                             (Some(new), Some(old)) if old != new => {
@@ -241,14 +392,13 @@ pub fn watch(
                             diff,
                         }
                     }
-                    Ok(_) => continue,
-                    Err(_) if !p.exists() => FileChange {
+                    Some(Err(_)) if !p.exists() => FileChange {
                         project: project.clone(),
                         path: rel,
                         hash: None,
                         diff: None,
                     },
-                    Err(_) => continue,
+                    _ => continue,
                 };
                 emit(change);
             }
@@ -287,6 +437,148 @@ mod tests {
         assert!(write(&g, ".git/config", "x", None).is_err());
         let l = list(&g, "").unwrap();
         assert_eq!(l[0], ("notes".to_string(), true, l[0].2));
+    }
+
+    #[test]
+    fn concurrent_updates_with_one_base_have_one_winner() {
+        let d = tempfile::tempdir().unwrap();
+        let guard = PathGuard::new(d.path()).unwrap();
+        let initial = write(&guard, "shared.txt", "base", None).unwrap();
+        let workers = 8;
+        let barrier = Arc::new(std::sync::Barrier::new(workers));
+        let handles: Vec<_> = (0..workers)
+            .map(|index| {
+                let guard = guard.clone();
+                let barrier = barrier.clone();
+                let base_hash = initial.hash.clone();
+                std::thread::spawn(move || {
+                    let content = format!("concurrent update {index}");
+                    barrier.wait();
+                    write(&guard, "shared.txt", &content, Some(&base_hash))
+                        .map(|version| (content, version))
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        let winners: Vec<_> = results
+            .iter()
+            .filter_map(|result| result.as_ref().ok())
+            .collect();
+        let conflicts = results
+            .iter()
+            .filter(|result| matches!(result, Err(SyncError::Conflict { .. })))
+            .count();
+        assert_eq!(winners.len(), 1);
+        assert_eq!(conflicts, workers - 1);
+        let final_version = read(&guard, "shared.txt").unwrap();
+        assert_eq!(
+            Some(final_version.hash.as_str()),
+            Some(winners[0].1.hash.as_str())
+        );
+        assert_eq!(
+            final_version.content.as_deref(),
+            Some(winners[0].0.as_str())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn new_file_writes_with_mixed_case_paths_share_the_host_lock() {
+        let d = tempfile::tempdir().unwrap();
+        let guard = PathGuard::new(d.path()).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = ["NewFile.txt", "newfile.TXT"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let guard = guard.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let content = format!("writer {index}");
+                    barrier.wait();
+                    write(&guard, path, &content, None).map(|version| (content, version))
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        let winner = results
+            .iter()
+            .filter_map(|result| result.as_ref().ok())
+            .next()
+            .expect("one case-aliased writer succeeds");
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(SyncError::Conflict { .. })))
+                .count(),
+            1
+        );
+        let actual = read(&guard, "NEWFILE.TXT").unwrap();
+        assert_eq!(actual.content.as_deref(), Some(winner.0.as_str()));
+    }
+
+    #[test]
+    fn failed_final_check_cleans_only_our_temp_and_preserves_legacy_pid_temp() {
+        let d = tempfile::tempdir().unwrap();
+        let guard = PathGuard::new(d.path()).unwrap();
+        let initial = write(&guard, "notes.txt", "base", None).unwrap();
+        let destination = d.path().join("notes.txt");
+        let legacy_temp =
+            destination.with_extension(format!("conductor-tmp-{}", std::process::id()));
+        std::fs::write(&legacy_temp, "legacy sentinel").unwrap();
+
+        let result = write_with_hook(
+            &guard,
+            "notes.txt",
+            "remote update",
+            Some(&initial.hash),
+            || std::fs::write(&destination, "external update").unwrap(),
+        );
+        assert!(matches!(result, Err(SyncError::Conflict { .. })));
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "external update"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&legacy_temp).unwrap(),
+            "legacy sentinel"
+        );
+        assert!(std::fs::read_dir(d.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".conductor-tmp-")
+        }));
+    }
+
+    #[test]
+    fn reads_and_conflict_checks_are_bounded_and_io_errors_are_not_conflicts() {
+        let d = tempfile::tempdir().unwrap();
+        let guard = PathGuard::new(d.path()).unwrap();
+        let large = vec![b'x'; MAX_TEXT as usize + 1];
+        std::fs::write(d.path().join("large.txt"), &large).unwrap();
+        assert!(matches!(
+            read(&guard, "large.txt"),
+            Err(SyncError::TooLarge)
+        ));
+        assert!(matches!(
+            write(&guard, "large.txt", "replacement", Some("old-hash")),
+            Err(SyncError::TooLarge)
+        ));
+
+        std::fs::create_dir(d.path().join("folder")).unwrap();
+        assert!(matches!(read(&guard, "folder"), Err(SyncError::Io(_))));
+        assert!(matches!(
+            write(&guard, "folder", "text", None),
+            Err(SyncError::Io(_))
+        ));
     }
 
     #[test]

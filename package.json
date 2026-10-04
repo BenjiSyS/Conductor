@@ -14,7 +14,7 @@
     "desktop:build": "tauri build",
     "format": "prettier --write \"apps/desktop/ui/**/*.{ts,svelte,css}\" \"tests/**/*.ts\"",
     "format:check": "prettier --check \"apps/desktop/ui/**/*.{ts,svelte,css}\" \"tests/**/*.ts\"",
-    "test:desktop": "node scripts/desktop-smoke.mjs && node scripts/desktop-lifecycle.mjs && node scripts/desktop-update.mjs && node scripts/desktop-usage.mjs",
+    "test:desktop": "node scripts/desktop-smoke.mjs && node scripts/desktop-lifecycle.mjs && node scripts/desktop-update.mjs && node scripts/desktop-usage.mjs && node scripts/desktop-bridge.mjs && node scripts/desktop-connectors.mjs",
     "mock-llm": "node scripts/mock-llm.mjs"
   },
   "dependencies": {

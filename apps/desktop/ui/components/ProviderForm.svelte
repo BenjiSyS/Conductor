@@ -3,6 +3,7 @@
   import { refresh, toast } from '../lib/app.svelte';
   import { call, readable } from '../lib/api';
   import type { Provider, ProviderKind } from '../lib/types';
+  import BridgeList from './BridgeList.svelte';
 
   let { ondone, compact = false }: { ondone?: (p: Provider) => void; compact?: boolean } = $props();
 
@@ -30,6 +31,14 @@
       url: 'https://generativelanguage.googleapis.com/v1beta',
       key: true,
       help: 'Create a key at aistudio.google.com → Get API key.',
+    },
+    {
+      id: 'xai',
+      label: 'xAI (Grok)',
+      kind: 'openai_compatible',
+      url: 'https://api.x.ai/v1',
+      key: true,
+      help: 'Create a key at console.x.ai → API Keys.',
     },
     {
       id: 'ollama',
@@ -103,6 +112,8 @@
   }
 </script>
 
+<BridgeList {ondone} />
+
 <div class="pf" class:compact>
   <div class="kinds" role="radiogroup" aria-label="Provider">
     {#each presets as x (x.id)}
@@ -116,7 +127,7 @@
         <input id="pf-name" class="input" bind:value={name} />
       </div>
     {/if}
-    {#if p.kind === 'openai_compatible'}
+    {#if p.kind === 'openai_compatible' && p.id !== 'xai'}
       <div class="field">
         <label class="label" for="pf-url">Base URL</label>
         <input id="pf-url" class="input mono" bind:value={url} spellcheck="false" />

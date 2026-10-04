@@ -53,7 +53,10 @@ impl Store {
     pub fn put<T: Serialize>(&self, kind: &str, id: &str, value: &T) -> Result<()> {
         let mut value = serde_json::to_value(value)?;
         sanitize_strings(&mut value);
-        let serialized = serde_json::to_string(&value)?;
+        self.put_json(kind, id, &value)
+    }
+    fn put_json(&self, kind: &str, id: &str, value: &serde_json::Value) -> Result<()> {
+        let serialized = serde_json::to_string(value)?;
         let db = self.connection.lock().map_err(|_| Error::StoreLocked)?;
         db.execute("INSERT INTO records(kind,id,value,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(kind,id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", params![kind,id,serialized,now()])?;
         Ok(())
@@ -108,7 +111,24 @@ impl Store {
         {
             return Err(Error::Invalid("Open a project first".into()));
         }
-        self.put("conversation", &conversation.id, conversation)
+        // Redact text, never binary encodings. Validate each message's image
+        // parts before preserving their bytes; historical turns may contain
+        // more images than one provider request can send together.
+        for message in &conversation.messages {
+            crate::providers::validate_images(std::slice::from_ref(message))?;
+        }
+        let mut value = serde_json::to_value(conversation)?;
+        let images: Vec<_> = value["messages"]
+            .as_array_mut()
+            .ok_or_else(|| Error::Invalid("Invalid conversation messages".into()))?
+            .iter_mut()
+            .map(|message| message["images"].take())
+            .collect();
+        sanitize_strings(&mut value);
+        for (index, images) in images.into_iter().enumerate() {
+            value["messages"][index]["images"] = images;
+        }
+        self.put_json("conversation", &conversation.id, &value)
     }
     pub fn history(&self, project_id: Option<String>, kind: &str, summary: &str) -> Result<()> {
         let entry_id = id();
@@ -278,6 +298,79 @@ mod tests {
         store.cache_put("x", "a", "summary")?;
         assert_eq!(store.cache_get("x", "b")?, None);
         assert_eq!(store.cache_get("x", "a")?, Some("summary".into()));
+        Ok(())
+    }
+    #[test]
+    fn conversation_images_round_trip_without_text_redaction_corrupting_bytes() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("images.db");
+        let store = Store::open(&path)?;
+        let project = Project {
+            id: id(),
+            name: "P".into(),
+            path: temp.path().display().to_string(),
+            kind: "folder".into(),
+            git: false,
+            opened_at: now(),
+        };
+        store.put("project", &project.id, &project)?;
+        // Valid base64 with a PNG signature. An arbitrary binary payload can
+        // coincidentally encode a token-shaped substring; it is not text.
+        use base64::Engine;
+        let binary = "iVBORw0KGgoA/AKIA1234567890123456/AA";
+        assert!(base64::engine::general_purpose::STANDARD
+            .decode(binary)
+            .unwrap()
+            .starts_with(b"\x89PNG\r\n\x1a\n"));
+        let token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+        assert_ne!(crate::context::redact(binary), binary);
+        let mut message = Message::new(Role::User, token.into());
+        message.images.push(ImageAttachment {
+            mime_type: "image/png".into(),
+            data: binary.into(),
+        });
+        let conversation = Conversation {
+            id: id(),
+            project_id: project.id,
+            title: "Images".into(),
+            mode: Mode::Chat,
+            provider_id: None,
+            model_id: None,
+            effort: None,
+            messages: vec![message],
+            updated_at: now(),
+        };
+        store.save_conversation(&conversation)?;
+        drop(store);
+        let store = Store::open(&path)?;
+        let restored: Conversation = store
+            .get("conversation", &conversation.id)?
+            .ok_or_else(|| Error::Invalid("Missing image conversation".into()))?;
+        assert_eq!(restored.messages[0].images[0].data, binary);
+        assert!(!restored.messages[0].text.contains(token));
+        let mut invalid = restored.clone();
+        invalid.messages[0].images[0].data = token.into();
+        assert!(matches!(
+            store.save_conversation(&invalid),
+            Err(Error::Invalid(_))
+        ));
+        invalid.messages[0].images[0].data = binary.into();
+        invalid.messages[0].images[0].mime_type = "application/octet-stream".into();
+        assert!(matches!(
+            store.save_conversation(&invalid),
+            Err(Error::Invalid(_))
+        ));
+        let unchanged: Conversation = store.get("conversation", &conversation.id)?.unwrap();
+        assert_eq!(unchanged.messages[0].images, restored.messages[0].images);
+        let mut history = restored.clone();
+        history.messages = vec![restored.messages[0].clone(); 12];
+        store.save_conversation(&history)?;
+        let history: Conversation = store.get("conversation", &history.id)?.unwrap();
+        assert_eq!(history.messages.len(), 12);
+        assert!(history
+            .messages
+            .iter()
+            .all(|message| message.images[0].data == binary));
         Ok(())
     }
 }

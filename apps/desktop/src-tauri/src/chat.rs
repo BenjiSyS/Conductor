@@ -467,6 +467,7 @@ pub async fn send_message(
     if mode == Mode::Goal {
         return Err("Use Start Goal for Goal mode".into());
     }
+    let started = std::time::Instant::now();
     let mut conversation: Conversation = state
         .store
         .get("conversation", &conversation_id)
@@ -521,6 +522,10 @@ pub async fn send_message(
                 break;
             }
             let secret = key(&config)?;
+            // Expand pasted-text chips for this request only (history keeps
+            // the chip), within about half of the model's context window.
+            let window = config.models.iter().find(|m| m.id == mid).and_then(|m| m.context_window).unwrap_or(32_000) as usize;
+            let text = conductor_engine::pastes::expand(&text, &state.data_dir.join("pastes"), window * 2);
             // Effort: explicit, Combo member, or automatic (never auto-max).
             let profile = avail.iter().find(|m| m.key() == model_key);
             let mut chosen_effort = match effort.as_deref() {
@@ -565,8 +570,11 @@ pub async fn send_message(
                 let env = AgentEnv {
                     providers: providers_all.clone(),
                     secrets: Arc::new(|id: &str| paths::secret(id)),
+                    integration_secrets: Arc::new(|name: &str| paths::integration_secret(name)),
                     settings: settings.clone(),
                     project_root: Path::new(&project.path).to_path_buf(),
+                    data_dir: state.data_dir.clone(),
+                    integration_project_id: Some(project.id.clone()),
                     approver: state.approvals.clone(),
                     events: state.events.clone(),
                     goal_id: None,
@@ -592,19 +600,43 @@ pub async fn send_message(
                 let ef = chosen_effort.clone();
                 let tid = format!("chat-{conv_id}");
                 let tid2 = tid.clone();
+                let (finish_tx, mut finish_rx) = tokio::sync::oneshot::channel();
                 let streamer = tokio::spawn(async move {
                     let mut acc = String::new();
-                    while let Ok(ev) = rx.recv().await {
+                    let consume = |ev, acc: &mut String| {
                         match ev {
                             conductor_engine::EngineEvent::Delta { task_id, text, .. } if task_id == tid2 => acc.push_str(&text),
                             conductor_engine::EngineEvent::Tool { task_id, summary, ok, .. } if task_id == tid2 => acc.push_str(&format!("\n\n> {} {}\n\n", if ok { "✓" } else { "✗" }, summary)),
-                            _ => continue,
+                            _ => return,
                         }
-                        let _ = app2.emit("run-update", RunUpdate { conversation_id: conv_id.clone(), message_id: mid2.clone(), text: conductor_security::secrets::redact(&conductor_engine::toolbox::strip_markup(&acc)).text, status: "streaming".into(), usage_input: 0, usage_output: 0, model: mk.clone(), effort: ef.clone(), notice: None });
+                        if acc.len() > 2_000_000 {
+                            let mut end = 2_000_000;
+                            while !acc.is_char_boundary(end) { end -= 1; }
+                            acc.truncate(end);
+                        }
+                        let visible = conductor_security::secrets::redact(&conductor_engine::toolbox::strip_markup(acc)).text;
+                        let _ = app2.emit("run-update", RunUpdate { conversation_id: conv_id.clone(), message_id: mid2.clone(), text: visible, status: "streaming".into(), usage_input: 0, usage_output: 0, model: mk.clone(), effort: ef.clone(), notice: None });
+                    };
+                    loop {
+                        tokio::select! {
+                            _ = &mut finish_rx => break,
+                            event = rx.recv() => match event {
+                                Ok(event) => consume(event, &mut acc),
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(_) => break,
+                            }
+                        }
                     }
+                    // The producer has finished. Drain queued deltas before
+                    // preserving the partial reply on cancellation or errors.
+                    while let Ok(event) = rx.try_recv() { consume(event, &mut acc); }
+                    conductor_security::secrets::redact(&conductor_engine::toolbox::strip_markup(&acc)).text
                 });
                 let r = agent::run_agent(&env, &model_key, chosen_effort.clone(), false, "You are working in Agent mode. Make the requested change, verify it, and finish with <done>.", &prompt, &tid, &token).await;
-                streamer.abort();
+                let _ = finish_tx.send(());
+                if let Ok(partial) = streamer.await {
+                    if let Some(message) = conversation.messages.last_mut() { message.text = partial; }
+                }
                 match r {
                     Ok(a) => {
                         let files = if a.files_changed.is_empty() { String::new() } else { format!("\n\nChanged: {}", a.files_changed.join(", ")) };
@@ -621,7 +653,10 @@ pub async fn send_message(
                 full.push_str(&pack.render());
                 // Recent turns verbatim; older turns are inside the pack summary.
                 let keep = conversation.messages.len().saturating_sub(13);
-                let msgs: Vec<Message> = conversation.messages[keep..conversation.messages.len() - 1].to_vec();
+                let mut msgs: Vec<Message> = conversation.messages[keep..conversation.messages.len() - 1].to_vec();
+                if let Some(m) = msgs.last_mut().filter(|m| m.role == Role::User) {
+                    m.text = conductor_security::secrets::redact(&text).text;
+                }
                 let mut request = providers::ProviderRequest { model: mid.to_string(), messages: msgs, instructions: full, effort: chosen_effort.clone(), allow_highest_effort: settings.allow_highest_effort };
                 let mut reply = String::new();
                 let (mut input, mut output) = (0u64, 0u64);
@@ -663,6 +698,12 @@ pub async fn send_message(
                     })
                     .await;
                 }
+                // Preserve delivered text even when the request was stopped or
+                // failed after a valid partial response. The match below saves
+                // both terminal status and this text to SQLite.
+                if let Some(message) = conversation.messages.last_mut() {
+                    message.text = conductor_security::secrets::redact(&reply).text;
+                }
                 r.map(|_| (reply, input, output))
             };
             match result {
@@ -675,6 +716,7 @@ pub async fn send_message(
                     let text = conversation.messages.last().map(|m| m.text.clone()).unwrap_or_default();
                     emit(&text, "complete", input, output, &notice);
                     crate::usage::record(&config.id, input, output);
+                    crate::extras::run_finished(&app, &conversation.title, true, started);
                     let _ = store.history(Some(project.id.clone()), "chat", &format!("{} answered ({:?})", config.name, mode));
                     final_result = Ok(());
                     break;
@@ -690,7 +732,12 @@ pub async fn send_message(
                     break;
                 }
                 Err(e) => {
-                    let msg = e.to_string();
+                    // Signed-in apps (CLI bridge) explain how to sign in again.
+                    let msg = match (&e, conductor_engine::cli_bridge::Cli::from_provider_id(&config.id)) {
+                        (Error::Provider { status: 401 | 403, .. }, Some(cli)) => format!("{} isn't signed in. {}", cli.label(), cli.sign_in_hint()),
+                        _ => e.to_string(),
+                    };
+                    crate::extras::run_finished(&app, &format!("{}: {}", conversation.title, conductor_core::context::truncate_utf8(&msg, 120)), false, started);
                     let partial = conversation.messages.last().map(|m| !m.text.is_empty()).unwrap_or(false);
                     if let Some(m) = conversation.messages.last_mut() {
                         m.status = "failed".into();

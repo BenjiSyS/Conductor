@@ -122,7 +122,7 @@ async fn pairing_scoped_files_conflicts_and_state_channel() {
     assert_eq!(h.connected_clients(), 1);
     h.publish(json!({ "type": "task", "project": "p1", "text": "Implementing lobby" }));
     h.publish(json!({ "type": "task", "project": "p2", "text": "hidden from this device" }));
-    h.publish(json!({ "type": "goal_progress", "done": 2, "total": 5 }));
+    h.publish(json!({ "type": "goal_progress", "project": "p1", "done": 2, "total": 5 }));
     let t = next_of(&mut rx, "task").await;
     assert_eq!(t["text"], "Implementing lobby");
     let g = next_of(&mut rx, "goal_progress").await;
@@ -139,7 +139,18 @@ async fn pairing_scoped_files_conflicts_and_state_channel() {
     assert_eq!(fc["path"], "src/main.rs");
 
     // Client actions reach the integrator.
-    tx.send(json!({ "type": "prompt", "text": "add tests" }))
+    for message in [
+        json!({"type":"stop"}),
+        json!({"type":"stop","project":"p2"}),
+    ] {
+        tx.send(message).await.unwrap();
+        next_of(&mut rx, "error").await;
+        assert!(
+            h.inbound.try_recv().is_err(),
+            "Rejected actions must not reach the integrator"
+        );
+    }
+    tx.send(json!({ "type": "prompt", "project": "p1", "text": "add tests" }))
         .await
         .unwrap();
     let inbound = tokio::time::timeout(Duration::from_secs(5), h.inbound.recv())

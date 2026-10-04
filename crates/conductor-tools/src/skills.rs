@@ -5,12 +5,90 @@
 //! in the common `SKILL.md`-with-frontmatter style are accepted too; a
 //! manifest is generated for them on install.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::Read,
+    path::{Component, Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::call::Capability;
 use crate::package::{Installed, PackageDir, PackageError};
+
+const MAX_SKILL_MANIFEST: usize = 128 * 1024;
+const MAX_SKILL_INSTRUCTIONS: usize = 8 * 1024;
+
+fn read_text_bounded(path: &Path, max: usize, truncate: bool) -> Result<String, PackageError> {
+    let file = std::fs::File::open(path)?;
+    if !truncate && file.metadata()?.len() > max as u64 {
+        return Err(PackageError::Invalid(format!(
+            "{} exceeds {max} bytes",
+            path.display()
+        )));
+    }
+    let mut bytes = Vec::with_capacity(max.min(16 * 1024));
+    file.take(max as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > max && !truncate {
+        return Err(PackageError::Invalid(format!(
+            "{} exceeds {max} bytes",
+            path.display()
+        )));
+    }
+    bytes.truncate(max);
+    match std::str::from_utf8(&bytes) {
+        Ok(_) => String::from_utf8(bytes)
+            .map_err(|_| PackageError::Invalid(format!("{} is not valid UTF-8", path.display()))),
+        Err(error) if truncate && error.error_len().is_none() => {
+            bytes.truncate(error.valid_up_to());
+            String::from_utf8(bytes).map_err(|_| {
+                PackageError::Invalid(format!("{} is not valid UTF-8", path.display()))
+            })
+        }
+        Err(_) => Err(PackageError::Invalid(format!(
+            "{} is not valid UTF-8",
+            path.display()
+        ))),
+    }
+}
+
+fn safe_relative(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && path.components().all(|component| match component {
+            Component::Normal(name) => {
+                let text = name.to_string_lossy();
+                let stem = text.split('.').next().unwrap_or("").to_ascii_uppercase();
+                !text.is_empty()
+                    && !text.contains(':')
+                    && !text.ends_with([' ', '.'])
+                    && !matches!(
+                        stem.as_str(),
+                        "CON"
+                            | "PRN"
+                            | "AUX"
+                            | "NUL"
+                            | "COM1"
+                            | "COM2"
+                            | "COM3"
+                            | "COM4"
+                            | "COM5"
+                            | "COM6"
+                            | "COM7"
+                            | "COM8"
+                            | "COM9"
+                            | "LPT1"
+                            | "LPT2"
+                            | "LPT3"
+                            | "LPT4"
+                            | "LPT5"
+                            | "LPT6"
+                            | "LPT7"
+                            | "LPT8"
+                            | "LPT9"
+                    )
+            }
+            _ => false,
+        })
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillCommand {
@@ -66,12 +144,18 @@ impl SkillManifest {
     }
 
     pub fn load(dir: &Path) -> Result<Self, PackageError> {
-        let text = std::fs::read_to_string(dir.join("skill.toml"))?;
+        let text = read_text_bounded(&dir.join("skill.toml"), MAX_SKILL_MANIFEST, false)?;
         let m: SkillManifest =
             toml::from_str(&text).map_err(|e| PackageError::Invalid(e.to_string()))?;
         m.capabilities()?;
-        let instr = dir.join(&m.instructions);
-        if m.instructions.contains("..") || !instr.exists() {
+        let instruction_path = Path::new(&m.instructions);
+        let instr = dir.join(instruction_path);
+        let base = dir.canonicalize()?;
+        if !safe_relative(instruction_path)
+            || !instr
+                .canonicalize()
+                .is_ok_and(|path| path.starts_with(&base))
+        {
             return Err(PackageError::Invalid(format!(
                 "instruction file '{}' missing",
                 m.instructions
@@ -129,7 +213,7 @@ impl Skills {
             return Ok(None);
         }
         let md = src.join("SKILL.md");
-        let text = std::fs::read_to_string(&md)
+        let text = read_text_bounded(&md, MAX_SKILL_MANIFEST, true)
             .map_err(|_| PackageError::Invalid("no skill.toml or SKILL.md found".into()))?;
         let (name, description) = frontmatter(&text).ok_or_else(|| {
             PackageError::Invalid("SKILL.md has no name in its frontmatter".into())
@@ -183,12 +267,22 @@ impl Skills {
     }
 
     pub fn list(&self) -> Vec<SkillInfo> {
+        let Some(root) = self.dir.root().canonicalize().ok() else {
+            return Vec::new();
+        };
         self.dir
             .installed_names()
             .into_iter()
             .filter_map(|n| {
                 let p = self.dir.path_of(&n);
+                let metadata = std::fs::symlink_metadata(&p).ok()?;
+                if !metadata.file_type().is_dir() || !p.canonicalize().ok()?.starts_with(&root) {
+                    return None;
+                }
                 let m = SkillManifest::load(&p).ok()?;
+                if m.name != n {
+                    return None;
+                }
                 let sensitive = m
                     .capabilities()
                     .unwrap_or_default()
@@ -243,7 +337,12 @@ impl Skills {
             .into_iter()
             .take(max)
             .filter_map(|(_, s)| {
-                let body = std::fs::read_to_string(s.path.join(&s.manifest.instructions)).ok()?;
+                let base = s.path.canonicalize().ok()?;
+                let path = s.path.join(&s.manifest.instructions).canonicalize().ok()?;
+                if !path.starts_with(&base) {
+                    return None;
+                }
+                let body = read_text_bounded(&path, MAX_SKILL_INSTRUCTIONS, true).ok()?;
                 Some((s.manifest, body))
             })
             .collect()
@@ -346,5 +445,63 @@ mod tests {
         )
         .unwrap();
         assert!(skills.install_dir(&a).is_err());
+    }
+
+    #[test]
+    fn runtime_reads_are_bounded_and_invalid_utf8_is_rejected() {
+        let d = tempfile::tempdir().unwrap();
+        let package = d.path().join("pkg");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("skill.toml"),
+            format!(
+                "name='x'\nversion='1'\ndescription='{}'",
+                "x".repeat(MAX_SKILL_MANIFEST)
+            ),
+        )
+        .unwrap();
+        assert!(
+            SkillManifest::load(&package).is_err(),
+            "oversized manifests must fail before parsing"
+        );
+        std::fs::write(package.join("skill.toml"), [0xff, 0xfe]).unwrap();
+        assert!(
+            SkillManifest::load(&package).is_err(),
+            "invalid UTF-8 manifest must fail closed"
+        );
+
+        let path = d.path().join("instructions.md");
+        std::fs::write(
+            &path,
+            format!("{}é", "x".repeat(MAX_SKILL_INSTRUCTIONS - 1)),
+        )
+        .unwrap();
+        let bounded = read_text_bounded(&path, MAX_SKILL_INSTRUCTIONS, true).unwrap();
+        assert!(bounded.len() <= MAX_SKILL_INSTRUCTIONS);
+        assert!(bounded.is_char_boundary(bounded.len()));
+        std::fs::write(&path, [b'x', 0xff]).unwrap();
+        assert!(read_text_bounded(&path, MAX_SKILL_INSTRUCTIONS, true).is_err());
+    }
+
+    #[test]
+    fn manifest_rejects_symlink_instruction_escape_when_supported() {
+        let d = tempfile::tempdir().unwrap();
+        let package = d.path().join("pkg");
+        std::fs::create_dir_all(&package).unwrap();
+        let outside = d.path().join("outside.md");
+        std::fs::write(&outside, "outside").unwrap();
+        let link = package.join("SKILL.md");
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(&outside, &link);
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside, &link);
+        if linked.is_ok() {
+            std::fs::write(
+                package.join("skill.toml"),
+                "name='pkg'\nversion='1'\ndescription='x'",
+            )
+            .unwrap();
+            assert!(SkillManifest::load(&package).is_err());
+        }
     }
 }

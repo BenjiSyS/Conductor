@@ -1,6 +1,7 @@
 //! Shared MCP configuration and per-provider adapters.
 
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -73,41 +74,62 @@ pub enum ConfigError {
 
 impl McpConfig {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        match std::fs::read(path) {
-            Ok(b) => serde_json::from_slice(&b).map_err(|e| ConfigError::Invalid(e.to_string())),
+        match std::fs::File::open(path) {
+            Ok(file) => {
+                let mut b = Vec::new();
+                file.take((super::client::MAX_FRAME + 1) as u64)
+                    .read_to_end(&mut b)?;
+                if b.len() > super::client::MAX_FRAME {
+                    return Err(ConfigError::Invalid("config exceeds 2 MiB".into()));
+                }
+                let config: Self =
+                    serde_json::from_slice(&b).map_err(|e| ConfigError::Invalid(e.to_string()))?;
+                let mut names = std::collections::BTreeSet::new();
+                for server in &config.servers {
+                    validate_server(server)?;
+                    if !names.insert(&server.name) {
+                        return Err(ConfigError::Invalid("duplicate server name".into()));
+                    }
+                }
+                Ok(config)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e.into()),
         }
     }
 
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
+        let bytes =
+            serde_json::to_vec_pretty(self).map_err(|e| ConfigError::Invalid(e.to_string()))?;
+        if bytes.len() > super::client::MAX_FRAME {
+            return Err(ConfigError::Invalid("config exceeds 2 MiB".into()));
+        }
+        for server in &self.servers {
+            validate_server(server)?;
+        }
         if let Some(p) = path.parent() {
             std::fs::create_dir_all(p)?;
         }
-        let tmp = path.with_extension("tmp");
-        std::fs::write(
-            &tmp,
-            serde_json::to_vec_pretty(self).map_err(|e| ConfigError::Invalid(e.to_string()))?,
-        )?;
-        std::fs::rename(tmp, path)?;
+        let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)?;
+        let result = (|| -> std::io::Result<()> {
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&tmp, path)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result?;
         Ok(())
     }
 
     pub fn upsert(&mut self, s: McpServer) -> Result<(), ConfigError> {
-        validate_name(&s.name)?;
-        if let Transport::Stdio { command, .. } = &s.transport {
-            if command.trim().is_empty() {
-                return Err(ConfigError::Invalid("command is empty".into()));
-            }
-        }
-        if let Transport::Http { url, .. } = &s.transport {
-            let local = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
-            if !url.starts_with("https://") && !local {
-                return Err(ConfigError::Invalid(
-                    "remote MCP servers must use https".into(),
-                ));
-            }
-        }
+        validate_server(&s)?;
         self.servers.retain(|x| x.name != s.name);
         self.servers.push(s);
         Ok(())
@@ -216,6 +238,59 @@ fn server_json(s: &McpServer) -> serde_json::Value {
     }
 }
 
+fn validate_server(server: &McpServer) -> Result<(), ConfigError> {
+    validate_name(&server.name)?;
+    let values = match &server.transport {
+        Transport::Stdio { env, .. } => env,
+        Transport::Http { headers, .. } => headers,
+    };
+    for (key, value) in values {
+        match value {
+            EnvValue::Literal(text) => {
+                let key = key.to_ascii_uppercase().replace('-', "_");
+                let sensitive = matches!(
+                    key.as_str(),
+                    "AUTHORIZATION"
+                        | "PROXY_AUTHORIZATION"
+                        | "API_KEY"
+                        | "TOKEN"
+                        | "SECRET"
+                        | "PASSWORD"
+                        | "PRIVATE_KEY"
+                ) || ["_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_PRIVATE_KEY"]
+                    .iter()
+                    .any(|suffix| key.ends_with(suffix));
+                if sensitive || !conductor_security::secrets::scan(text).is_empty() {
+                    return Err(ConfigError::Invalid(
+                        "credential values must use an OS-vault secret reference".into(),
+                    ));
+                }
+            }
+            EnvValue::Secret { secret } => {
+                if secret.is_empty()
+                    || secret.len() > 128
+                    || !secret
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                {
+                    return Err(ConfigError::Invalid(
+                        "invalid credential reference name".into(),
+                    ));
+                }
+            }
+        }
+    }
+    match &server.transport {
+        Transport::Stdio { command, .. } if command.trim().is_empty() => {
+            Err(ConfigError::Invalid("command is empty".into()))
+        }
+        Transport::Http { url, .. } => super::session::validate_http_url(url)
+            .map(|_| ())
+            .map_err(|e| ConfigError::Invalid(e.to_string())),
+        _ => Ok(()),
+    }
+}
+
 fn validate_name(n: &str) -> Result<(), ConfigError> {
     if n.is_empty()
         || n.len() > 64
@@ -313,5 +388,35 @@ mod tests {
             .unwrap()
             .servers
             .is_empty());
+    }
+
+    #[test]
+    fn plaintext_credentials_are_refused_without_echoing_values() {
+        let mut config = McpConfig::default();
+        let mut server = gh();
+        server.transport = Transport::Http {
+            url: "https://example.com/mcp".into(),
+            headers: BTreeMap::from([(
+                "Authorization".into(),
+                EnvValue::Literal("opaque-password-value".into()),
+            )]),
+        };
+        let error = config.upsert(server).unwrap_err().to_string();
+        assert!(!error.contains("opaque-password-value"));
+        let mut server = gh();
+        server.transport = Transport::Stdio {
+            command: "node".into(),
+            args: vec![],
+            env: BTreeMap::from([("NODE_ENV".into(), EnvValue::Literal("development".into()))]),
+        };
+        config.upsert(server).unwrap();
+        let mut server = gh();
+        if let Transport::Stdio { env, .. } = &mut server.transport {
+            env.insert(
+                "GITHUB_TOKEN".into(),
+                EnvValue::Literal("opaque-password-value".into()),
+            );
+        }
+        assert!(config.upsert(server).is_err());
     }
 }
