@@ -602,6 +602,42 @@ mod tests {
     }
 
     #[test]
+    fn presets_only_use_connected_providers_for_one_two_or_three() {
+        let all = models();
+        for providers in [
+            vec!["openai"],
+            vec!["openai", "anthropic"],
+            vec!["openai", "anthropic", "google"],
+        ] {
+            let avail: Vec<ModelProfile> = all
+                .iter()
+                .filter(|m| providers.contains(&m.provider.as_str()))
+                .cloned()
+                .collect();
+            let p = presets(&avail);
+            assert!(!p.is_empty(), "{providers:?}: presets offered");
+            for c in &p {
+                for m in &c.members {
+                    let provider = m.model.split('/').next().unwrap();
+                    assert!(
+                        providers.contains(&provider),
+                        "{providers:?}: {} uses {}",
+                        c.id,
+                        m.model
+                    );
+                }
+            }
+            if providers.len() == 1 {
+                // One provider: nothing pretends to be cross-provider.
+                assert!(p
+                    .iter()
+                    .all(|c| c.members.iter().all(|m| m.model.starts_with("openai/"))));
+            }
+        }
+        assert!(presets(&[]).is_empty());
+    }
+
+    #[test]
     fn presets_adapt_to_available_models() {
         let p = presets(&models());
         let ids: Vec<_> = p.iter().map(|c| c.id.as_str()).collect();

@@ -42,6 +42,9 @@ export interface Prefs {
   remote_continue_on_disconnect: boolean;
   emergency_shortcut: string;
   subscription_signin: boolean;
+  notify_done: boolean;
+  notify_sound: boolean;
+  notify_low_usage: boolean;
   seen_resume: Record<string, number>;
 }
 
@@ -419,6 +422,8 @@ export interface UsageOverview {
     name: string;
     kind: ProviderKind;
     enabled: boolean;
+    bridge: 'gemini' | 'chatgpt' | 'claude' | null;
+    brand: 'claude' | 'chatgpt' | 'gemini' | 'grok' | 'other';
     limits: {
       requests: RateWindow;
       tokens: RateWindow;
@@ -442,4 +447,24 @@ export interface SubscriptionUsage {
   account: string | null;
   plan: string | null;
   windows: { label: string; used_percent: number; resets_at: string | null; resets_at_unix: number | null }[];
+}
+export interface BridgeInfo {
+  cli: 'agy' | 'codex' | 'claude';
+  label: string;
+  brand: 'gemini' | 'chatgpt' | 'claude';
+  installed: boolean;
+  version: string | null;
+  connected: boolean;
+  sign_in_hint: string;
+}
+export interface SetupScan {
+  tools: {
+    id: string;
+    name: string;
+    state: 'ok' | 'missing' | 'broken' | 'too_old';
+    version: string | null;
+    install: string[] | null;
+  }[];
+  bridges: { cli: string; label: string; brand: string; version: string | null }[];
+  local: { id: string; label: string; url: string; models: number }[];
 }

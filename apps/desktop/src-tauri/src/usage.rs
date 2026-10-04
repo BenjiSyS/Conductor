@@ -38,14 +38,14 @@ fn test_mode() -> Option<String> {
         .flatten()
 }
 
-fn endpoints(service: Service) -> Endpoints {
+pub(crate) fn endpoints(service: Service) -> Endpoints {
     match test_mode() {
         Some(base) => Endpoints::local(&base, service),
         None => Endpoints::official(service),
     }
 }
 
-fn open_browser(url: &str) {
+pub(crate) fn open_browser(url: &str) {
     if test_mode().is_some() {
         // Tests stand in for the browser: follow the authorize redirect to
         // the loopback callback.
@@ -73,6 +73,23 @@ fn enabled(state: &AppState) -> CmdResult<()> {
     }
 }
 
+fn brand(p: &conductor_core::domain::ProviderConfig) -> &'static str {
+    use conductor_core::domain::ProviderKind;
+    if let Some(cli) = conductor_engine::cli_bridge::Cli::from_provider_id(&p.id) {
+        return cli.brand();
+    }
+    let host = url::Url::parse(&p.base_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string));
+    match (&p.kind, host.as_deref()) {
+        (_, Some("api.x.ai")) => "grok",
+        (ProviderKind::Anthropic, _) => "claude",
+        (ProviderKind::Openai, _) => "chatgpt",
+        (ProviderKind::Gemini, _) => "gemini",
+        _ => "other",
+    }
+}
+
 #[tauri::command]
 pub async fn usage_overview(state: State<'_, AppState>) -> CmdResult<Value> {
     let snapshot = state
@@ -90,6 +107,10 @@ pub async fn usage_overview(state: State<'_, AppState>) -> CmdResult<Value> {
                 "name": p.name,
                 "kind": p.kind,
                 "enabled": p.enabled,
+                // Brand of the signed-in app this provider bridges, if any.
+                "bridge": conductor_engine::cli_bridge::Cli::from_provider_id(&p.id).map(|c| c.brand()),
+                // Which brand tab (and theme) the provider belongs to.
+                "brand": brand(p),
                 "limits": conductor_core::limits::get(&p.id),
                 "session": { "input": s.input, "output": s.output, "requests": s.requests },
             })
@@ -127,12 +148,15 @@ pub async fn subscription_sign_in(state: State<'_, AppState>, service: String) -
 
 #[tauri::command]
 pub async fn subscription_usage(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     service: String,
 ) -> CmdResult<SubscriptionUsage> {
     enabled(&state)?;
     let service = Service::parse(&service)?;
-    subscriptions::usage(service, &endpoints(service)).await
+    let u = subscriptions::usage(service, &endpoints(service)).await?;
+    crate::extras::check_usage(&app, &u);
+    Ok(u)
 }
 
 #[tauri::command]

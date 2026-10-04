@@ -5,8 +5,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::client::{McpClient, McpError};
+use super::client::McpError;
 use super::config::{EnvValue, McpServer, Transport};
+use super::session::McpSession;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -120,87 +121,73 @@ pub async fn diagnose(
             Fix::Enable,
         );
     }
-    let Transport::Stdio { command, args, env } = &server.transport else {
-        // Remote HTTP servers: configuration sanity only (network checks are
-        // done by the integrator with the user's credentials).
-        return mk(
-            McpStatus::NotChecked,
-            format!("{} is a remote server", server.name),
-            "HTTP transport".into(),
-            vec![],
-            Fix::None,
-        );
-    };
-    if crate::exec::resolve_program(command).is_none() {
-        return mk(
-            McpStatus::MissingDependency,
-            format!("{} needs '{}', which isn't installed", server.name, command),
-            format!("'{command}' not found on PATH"),
-            vec![],
-            Fix::InstallDependency {
-                tool: command.clone(),
-                hint: dependency_hint(command),
-            },
-        );
-    }
-    let env = match resolve_env(env, secrets) {
-        Ok(e) => e,
-        Err(missing) => {
+    if let Transport::Stdio { command, .. } = &server.transport {
+        if crate::exec::resolve_program(command).is_none() {
             return mk(
-                McpStatus::AuthenticationRequired,
-                format!("{} needs a credential: {missing}", server.name),
-                format!("secret '{missing}' is not set"),
+                McpStatus::MissingDependency,
+                format!("{} needs '{}', which isn't installed", server.name, command),
+                format!("'{command}' not found on PATH"),
                 vec![],
-                Fix::SetSecret { name: missing },
-            )
-        }
-    };
-    let mut client = match McpClient::spawn(command, args, &env, None, timeout_secs).await {
-        Ok(c) => c,
-        Err(e) => {
-            let detail = e.to_string();
-            let status = if detail.to_lowercase().contains("denied") {
-                McpStatus::PermissionIssue
-            } else {
-                McpStatus::Broken
-            };
-            return mk(
-                status,
-                format!("{} could not start", server.name),
-                detail,
-                vec![],
-                Fix::EditConfig {
-                    hint: "Check the command and arguments.".into(),
+                Fix::InstallDependency {
+                    tool: command.clone(),
+                    hint: dependency_hint(command),
                 },
             );
         }
+    }
+    let values = match &server.transport {
+        Transport::Stdio { env, .. } => env,
+        Transport::Http { headers, .. } => headers,
     };
-    let init = client.initialize().await;
-    let result = match init {
-        Ok(_) => match client.list_tools().await {
-            Ok(tools) => mk(
+    for value in values.values() {
+        if let EnvValue::Secret { secret } = value {
+            if secrets(secret).is_none_or(|s| s.is_empty()) {
+                return mk(
+                    McpStatus::AuthenticationRequired,
+                    format!("{} needs a credential: {secret}", server.name),
+                    format!("secret '{secret}' is not set"),
+                    vec![],
+                    Fix::SetSecret {
+                        name: secret.clone(),
+                    },
+                );
+            }
+        }
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let operation = async {
+        let mut client = McpSession::connect(server, secrets, &cwd, &cancel).await?;
+        let result = client.list_tools(&cancel).await.map(|tools| {
+            let detail = client
+                .server_info()
+                .map(|s| format!("{} {} (protocol {})", s.name, s.version, s.protocol_version))
+                .unwrap_or_default();
+            mk(
                 McpStatus::Connected,
                 format!("{} connected · {} tool(s)", server.name, tools.len()),
-                client
-                    .server
-                    .as_ref()
-                    .map(|s| format!("{} {} (protocol {})", s.name, s.version, s.protocol_version))
-                    .unwrap_or_default(),
+                detail,
                 tools.into_iter().map(|t| t.name).collect(),
                 Fix::None,
-            ),
-            Err(e) => mk(
-                McpStatus::Broken,
-                format!("{} started but tools could not be listed", server.name),
-                e.to_string(),
-                vec![],
-                Fix::Reconnect,
-            ),
-        },
-        Err(e) => classify_failure(server, e, client.stderr_tail()),
+            )
+        });
+        client.shutdown().await;
+        result
     };
-    client.shutdown().await;
-    result
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs.max(1)),
+        operation,
+    )
+    .await
+    {
+        Ok(Ok(diagnosis)) => diagnosis,
+        Ok(Err(error)) => classify_failure(server, error, String::new()),
+        Err(_) => classify_failure(
+            server,
+            McpError::Timeout(timeout_secs.max(1)),
+            String::new(),
+        ),
+    }
 }
 
 fn classify_failure(server: &McpServer, e: McpError, stderr: String) -> Diagnosis {

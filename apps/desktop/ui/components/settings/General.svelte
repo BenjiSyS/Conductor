@@ -68,6 +68,45 @@
   />
 </div>
 
+<h3 class="sub">Notifications</h3>
+<div class="setting">
+  <div class="text">
+    <strong>Tell me when work finishes</strong>
+    <p>A desktop notification when a chat, Agent run or Goal finishes while you're away from Conductor.</p>
+  </div>
+  <Toggle
+    checked={app.prefs?.notify_done !== false}
+    label="Notify when work finishes"
+    onchange={(v) => attempt(() => savePrefs({ notify_done: v }))}
+  />
+</div>
+<div class="setting">
+  <div class="text">
+    <strong>Warn when a plan is almost used up</strong>
+    <p>When a signed-in Claude, ChatGPT or Gemini plan has under 10% of its 5-hour or weekly limit left.</p>
+  </div>
+  <Toggle
+    checked={app.prefs?.notify_low_usage !== false}
+    label="Warn when usage is low"
+    onchange={(v) => attempt(() => savePrefs({ notify_low_usage: v }))}
+  />
+</div>
+<div class="setting">
+  <div class="text">
+    <strong>Ding sound</strong>
+    <p>Play a short sound with notifications.</p>
+  </div>
+  <div class="row">
+    <button class="btn sm ghost" onclick={() => call('test_notification')}>Test</button>
+    <Toggle
+      checked={app.prefs?.notify_sound !== false}
+      label="Ding sound"
+      onchange={(v) => attempt(() => savePrefs({ notify_sound: v }))}
+    />
+  </div>
+</div>
+
+<h3 class="sub">Models</h3>
 <div class="setting">
   <div class="text">
     <strong>Default model or Combo</strong>

@@ -25,6 +25,46 @@
     }[]
   >([]);
   let source = $state('');
+  let remoteName = $state('');
+  let remoteUrl = $state('');
+
+  // Remote connectors: add by URL; Conductor opens the service's sign-in page
+  // when it needs one (no app registration or tokens to copy).
+  async function connectRemote() {
+    const url = remoteUrl.trim();
+    const name =
+      remoteName.trim() ||
+      (() => {
+        try {
+          return new URL(url).hostname.replace(/^(www|mcp|api)./, '').split('.')[0];
+        } catch {
+          return '';
+        }
+      })();
+    if (!url || !name) return;
+    busy = 'remote';
+    toast('Finish signing in in your browser if it opens…');
+    const d = await attempt(() =>
+      call<Diagnosis>('mcp_connect_remote', { name: name.replace(/[^A-Za-z0-9_-]/g, '-'), url }),
+    );
+    busy = null;
+    if (d) {
+      diag = { ...diag, [d.server]: d };
+      toast(
+        d.status === 'connected' ? `${d.server} connected` : `${d.server}: ${d.summary}`,
+        d.status === 'connected' ? 'success' : 'info',
+      );
+      remoteName = '';
+      remoteUrl = '';
+      await loadMcp();
+    }
+  }
+  async function signIn(name: string) {
+    busy = name;
+    const d = await attempt(() => call<Diagnosis>('mcp_sign_in', { name }));
+    busy = null;
+    if (d) diag = { ...diag, [d.server]: d };
+  }
 
   async function loadMcp() {
     catalog = await call<CatalogEntry[]>('mcp_catalog', { query: q || null });
@@ -136,6 +176,9 @@
         <span class="dot {d ? statusClass(d.status) : ''}"></span>
         <strong class="small">{s.name}</strong>
         <span class="xsmall faint grow">{d ? d.summary : s.source}</span>
+        {#if s.transport.type === 'http'}
+          <button class="btn sm ghost" onclick={() => signIn(s.name)} disabled={busy !== null}>Sign in</button>
+        {/if}
         <Toggle
           checked={s.enabled}
           label="Enable {s.name}"
@@ -173,6 +216,19 @@
   {:else}
     <p class="muted small">No MCP servers yet.</p>
   {/each}
+
+  <h3 class="sub">Connect a remote connector</h3>
+  <p class="xsmall muted">
+    Paste the connector's URL (for example from GitHub, Linear, Notion or Sentry). If it needs an account, its sign-in
+    page opens — no keys to copy.
+  </p>
+  <div class="row remote">
+    <input class="input" bind:value={remoteUrl} placeholder="https://mcp.example.com/mcp" aria-label="Connector URL" />
+    <input class="input name" bind:value={remoteName} placeholder="Name (optional)" aria-label="Connector name" />
+    <button class="btn primary" onclick={connectRemote} disabled={!remoteUrl.trim() || busy !== null}
+      >{busy === 'remote' ? 'Connecting…' : 'Connect'}</button
+    >
+  </div>
 
   <h3 class="sub">Add an MCP server</h3>
   <div class="searchbox">
@@ -306,6 +362,13 @@
 {/if}
 
 <style>
+  .remote {
+    gap: var(--s2);
+    margin-bottom: var(--s3);
+  }
+  .remote .name {
+    max-width: 170px;
+  }
   .tabs {
     margin-bottom: var(--s4);
   }

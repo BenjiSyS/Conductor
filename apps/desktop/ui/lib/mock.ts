@@ -50,6 +50,9 @@ const prefsDefault: Prefs = {
   remote_continue_on_disconnect: true,
   emergency_shortcut: 'CmdOrCtrl+Alt+Shift+X',
   subscription_signin: false,
+  notify_done: true,
+  notify_sound: true,
+  notify_low_usage: true,
   seen_resume: {},
 };
 
@@ -65,6 +68,10 @@ const db = {
   goals: [] as GoalRecord[],
   mcp: [] as { name: string; enabled: boolean; source: string; transport: unknown; description: string }[],
   host: false,
+  pastes: {} as Record<string, string>,
+  notified: 0,
+  gitInstalled: false,
+  signedConnectors: new Set<string>(),
   subscriptions: {} as Record<string, { account: string | null; plan: string | null }>,
 };
 
@@ -413,16 +420,28 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
                   vision: true,
                 },
               ]
-            : [
-                {
-                  id: 'local-model',
-                  name: 'Local model',
-                  efforts: [],
-                  context_window: 32000,
-                  tools: false,
-                  vision: false,
-                },
-              ];
+            : c.base_url.includes('api.x.ai')
+              ? [
+                  { id: 'grok-4', name: 'Grok 4', efforts: [], context_window: 256000, tools: true, vision: true },
+                  {
+                    id: 'grok-4-fast',
+                    name: 'Grok 4 Fast',
+                    efforts: [],
+                    context_window: 2000000,
+                    tools: true,
+                    vision: true,
+                  },
+                ]
+              : [
+                  {
+                    id: 'local-model',
+                    name: 'Local model',
+                    efforts: [],
+                    context_window: 32000,
+                    tools: false,
+                    vision: false,
+                  },
+                ];
     const p = { ...c, models, enabled: true };
     db.providers = db.providers.filter((x) => x.id !== p.id).concat(p);
     hist(null, 'provider', `Connected ${p.name}`);
@@ -442,6 +461,15 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
         name: p.name,
         kind: p.kind,
         enabled: p.enabled,
+        bridge:
+          ({ 'cli-agy': 'gemini', 'cli-codex': 'chatgpt', 'cli-claude': 'claude' } as Record<string, string>)[p.id] ??
+          null,
+        brand:
+          ({ 'cli-agy': 'gemini', 'cli-codex': 'chatgpt', 'cli-claude': 'claude' } as Record<string, string>)[p.id] ??
+          (p.base_url.includes('api.x.ai')
+            ? 'grok'
+            : (({ anthropic: 'claude', openai: 'chatgpt', gemini: 'gemini' } as Record<string, string>)[p.kind] ??
+              'other')),
         limits:
           p.kind === 'openai'
             ? {
@@ -471,6 +499,42 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
         plan: on ? (db.subscriptions[service]?.plan ?? null) : null,
       })),
     };
+  },
+  cli_bridges: () => ({
+    running: true,
+    bridges: (
+      [
+        ['agy', 'Gemini (Antigravity CLI)', 'gemini', '1.2.16'],
+        ['codex', 'ChatGPT (Codex CLI)', 'chatgpt', 'codex-cli 0.153.4'],
+        ['claude', 'Claude (Claude Code)', 'claude', null],
+      ] as const
+    ).map(([cli, label, brand, version]) => ({
+      cli,
+      label,
+      brand,
+      installed: version !== null,
+      version,
+      connected: db.providers.some((p) => p.id === `cli-${cli}` && p.enabled),
+      sign_in_hint: 'Open a terminal and sign in.',
+    })),
+  }),
+  cli_bridge_connect: async (a) => {
+    await new Promise((r) => setTimeout(r, 200));
+    const cli = a.cli as string;
+    const label = { agy: 'Gemini (Antigravity CLI)', codex: 'ChatGPT (Codex CLI)', claude: 'Claude (Claude Code)' }[
+      cli
+    ]!;
+    const ids = cli === 'agy' ? ['default', 'gemini-3.8-flash-medium', 'gemini-3.1-pro-high'] : ['default'];
+    const p: Provider = {
+      id: `cli-${cli}`,
+      name: label,
+      kind: 'openai_compatible',
+      base_url: `http://127.0.0.1:47999/${cli}/v1`,
+      models: ids.map((id) => ({ id, name: id, efforts: [], context_window: null, tools: false, vision: false })),
+      enabled: true,
+    };
+    db.providers = [...db.providers.filter((x) => x.id !== p.id), p];
+    return p;
   },
   subscription_sign_in: async (a) => {
     if (!db.prefs.subscription_signin)
@@ -512,6 +576,41 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
             ];
     return { service: s, account: db.subscriptions[s].account, plan: db.subscriptions[s].plan, windows };
   },
+  save_paste: (a) => {
+    const text = a.text as string;
+    const id = Array.from({ length: 32 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
+    db.pastes[id] = text;
+    // Count lines like the backend (str::lines): a trailing newline adds none.
+    const lines = Math.max(1, text.split(/\n/).length - (text.endsWith('\n') ? 1 : 0));
+    return { id, chars: [...text].length, lines, path: `(preview)/pastes/${id}.txt` };
+  },
+  profile_info: () => ({ user: 'Alex' }),
+  setup_prepare: () => {},
+  setup_scan: async () => {
+    await new Promise((r) => setTimeout(r, 150));
+    return {
+      tools: [
+        {
+          id: 'git',
+          name: 'Git',
+          state: db.gitInstalled ? 'ok' : 'missing',
+          version: db.gitInstalled ? '2.49.0' : null,
+          install: ['winget', 'install', '--id', 'Git.Git'],
+        },
+        { id: 'node', name: 'Node.js', state: 'ok', version: '22.11.0', install: null },
+      ],
+      bridges: [{ cli: 'agy', label: 'Gemini (Antigravity CLI)', brand: 'gemini', version: '1.2.16' }],
+      local: [{ id: 'ollama', label: 'Ollama', url: 'http://localhost:11434/v1', models: 3 }],
+    };
+  },
+  env_install: async (a) => {
+    await new Promise((r) => setTimeout(r, 200));
+    if (a.tool === 'git') db.gitInstalled = true;
+    return 'Git installed.';
+  },
+  test_notification: () => {
+    db.notified += 1;
+  },
   subscription_sign_out: (a) => {
     delete db.subscriptions[a.service as string];
   },
@@ -545,6 +644,8 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
     if (!c) throw new Error('Conversation missing');
     if (!profiles().length) throw new Error('Connect a provider first (Settings → Providers).');
     const text = String(a.text);
+    if (!text.trim() || new TextEncoder().encode(text).length > 64_000)
+      throw new Error('Prompt must contain 1–64,000 bytes');
     if (!c.messages.length) c.title = text.slice(0, 70);
     c.messages.push({ id: id(), role: 'user', text, created_at: now(), status: 'complete', provider: null });
     c.updated_at = now();
@@ -820,6 +921,39 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
       summary: `${a.id} connected · 13 tool(s)`,
       detail: '',
       tools: ['echo'],
+      fix: { kind: 'none' },
+    };
+  },
+  mcp_connect_remote: async (a) => {
+    await delay(300);
+    db.mcp = db.mcp
+      .filter((m) => m.name !== a.name)
+      .concat({
+        name: String(a.name),
+        enabled: true,
+        source: String(a.url),
+        transport: { type: 'http', url: String(a.url) },
+        description: '',
+      });
+    db.signedConnectors.add(String(a.name));
+    return {
+      server: a.name,
+      status: 'connected',
+      summary: `${a.name} connected · 21 tool(s)`,
+      detail: '',
+      tools: ['search'],
+      fix: { kind: 'none' },
+    };
+  },
+  mcp_sign_in: async (a) => {
+    await delay(200);
+    db.signedConnectors.add(String(a.name));
+    return {
+      server: a.name,
+      status: 'connected',
+      summary: `${a.name} connected · 21 tool(s)`,
+      detail: '',
+      tools: ['search'],
       fix: { kind: 'none' },
     };
   },

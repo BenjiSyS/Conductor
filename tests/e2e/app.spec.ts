@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { completeWizard, openProject, shots } from './helpers';
+import { completeWizard, openProject, openSettings, shots } from './helpers';
 
 test.describe('first run', () => {
   test('wizard walks every step and can be skipped', async ({ page }) => {
@@ -44,6 +44,24 @@ test.describe('first run', () => {
   });
 });
 
+test.describe('setup in the background', () => {
+  test('wizard checks the computer while open, installs Git, and offers local models', async ({ page }) => {
+    await page.goto('/');
+    const ready = page.getByRole('region', { name: 'Getting your computer ready' });
+    await expect(ready.getByText('Git — not found')).toBeVisible();
+    await expect(ready.getByText('Local models (work offline): Ollama · 3 models')).toBeVisible();
+    await expect(ready.getByText('Signed-in AI apps: Gemini (Antigravity CLI)')).toBeVisible();
+    await ready.getByRole('button', { name: 'Install' }).click();
+    await expect(ready.getByText('Git 2.49.0')).toBeVisible();
+    await page.screenshot({ path: `${shots}/26-wizard-ready.png` });
+    // The provider step offers the local model and signed-in app with one click.
+    await page.getByRole('button', { name: 'Get started' }).click();
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Connect Ollama' }).click();
+    await expect(page.getByText('Ollama connected · 1 model (works offline)')).toBeVisible();
+  });
+});
+
 test.describe('daily use', () => {
   test.beforeEach(async ({ page }) => {
     await completeWizard(page);
@@ -68,6 +86,33 @@ test.describe('daily use', () => {
     await page.screenshot({ path: `${shots}/06-chat.png` });
   });
 
+  test('a 5-million-character paste becomes a chip and sends without freezing', async ({ page }) => {
+    const prompt = page.getByLabel('Prompt');
+    await prompt.fill('Summarize this: ');
+    const started = Date.now();
+    await prompt.evaluate((el) => {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', 'log line\n'.repeat(555_556).slice(0, 5_000_000));
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+    await expect(prompt).toHaveValue(
+      /^Summarize this: \[Pasted text #1 · 5,000,000 chars · 555,556 lines · paste:[0-9a-f]{32}\]$/,
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+    await prompt.press('Enter');
+    const sent = page.getByRole('article', { name: 'user message' });
+    await expect(sent).toContainText('[Pasted text #1 · 5,000,000 chars · 555,556 lines]');
+    await expect(sent).not.toContainText('paste:');
+    await expect(page.getByRole('button', { name: 'Send' })).toBeVisible({ timeout: 15_000 });
+    // Small pastes stay as normal text.
+    await prompt.evaluate((el) => {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', 'short');
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+    await expect(prompt).not.toHaveValue(/Pasted text/);
+  });
+
   test('stop interrupts a streaming reply', async ({ page }) => {
     await page.getByLabel('Prompt').fill('Explain everything');
     await page.getByLabel('Prompt').press('Enter');
@@ -85,16 +130,24 @@ test.describe('daily use', () => {
     await page.screenshot({ path: `${shots}/07-model-picker.png` });
     await list.getByLabel('Search models').fill('mini');
     await list.getByRole('option', { name: /GPT-5 mini/ }).click();
-    const effort = page.getByLabel('Effort', { exact: true });
-    await expect(effort).toBeVisible();
-    await expect(effort.locator('option')).toHaveText(['Auto', 'Minimal', 'Low', 'Medium', 'High']);
-    // A Combo uses per-member effort.
+    // Effort slider: Auto plus only the levels the model declares.
+    const effort = page.getByRole('slider', { name: 'Effort', exact: true });
+    await expect(effort).toHaveAttribute('max', '4');
+    await expect(effort).toHaveAttribute('aria-valuetext', 'Auto');
+    await effort.focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await expect(effort).toHaveAttribute('aria-valuetext', 'Low');
+    await page.keyboard.press('End');
+    await expect(effort).toHaveAttribute('aria-valuetext', 'High');
+    // A Combo offers every level its members support (members skip the rest).
     await page
       .getByRole('button', { name: /GPT-5 mini/ })
       .first()
       .click();
     await page.getByRole('option', { name: /Balanced/ }).click();
-    await expect(page.getByLabel('Effort', { exact: true })).toBeHidden();
+    // The chosen level carries over when the Combo supports it.
+    await expect(page.getByRole('slider', { name: 'Effort', exact: true })).toHaveAttribute('aria-valuetext', 'High');
   });
 
   test('context inspector explains what is sent', async ({ page }) => {
@@ -142,7 +195,7 @@ test.describe('daily use', () => {
   });
 
   test('settings: every section opens', async ({ page }) => {
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await openSettings(page);
     const s = page.getByRole('dialog', { name: 'Settings' });
     const sections: [string, string][] = [
       ['General', 'General'],
@@ -169,7 +222,7 @@ test.describe('daily use', () => {
   });
 
   test('usage: themed per provider, API limits, opt-in subscription sign-in', async ({ page }) => {
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await openSettings(page);
     const s = page.getByRole('dialog', { name: 'Settings' });
     await s.getByRole('navigation').getByRole('button', { name: 'Usage', exact: true }).click();
     const panel = s.getByTestId('usage-panel');
@@ -181,7 +234,8 @@ test.describe('daily use', () => {
     const claudeBg = await bg();
     await tabs.getByRole('tab', { name: 'ChatGPT' }).click();
     await expect(panel).toHaveAttribute('data-brand', 'chatgpt');
-    expect(await bg()).not.toBe(claudeBg);
+    // The panel animates between themes; wait for the new colour.
+    await expect.poll(bg).not.toBe(claudeBg);
 
     // API rate limits come from the provider's last response.
     await expect(panel.getByText('487 of 500 left')).toBeVisible();
@@ -219,6 +273,58 @@ test.describe('daily use', () => {
     await expect(panel.getByRole('button', { name: 'Sign in with Claude' })).toBeVisible();
   });
 
+  test('connect a signed-in app (no API key) and see it under its brand', async ({ page }) => {
+    await openSettings(page);
+    const s = page.getByRole('dialog', { name: 'Settings' });
+    await s.getByRole('navigation').getByRole('button', { name: 'Providers', exact: true }).click();
+    await s.getByRole('button', { name: 'Add provider' }).click();
+    const apps = s.getByRole('region', { name: 'Apps you already have' });
+    await expect(apps.getByText('Gemini (Antigravity CLI)')).toBeVisible();
+    // Not installed apps are not offered.
+    await expect(apps.getByText('Claude (Claude Code)')).toHaveCount(0);
+    await apps.getByRole('button', { name: 'Connect Gemini (Antigravity CLI)' }).click();
+    await expect(page.getByText('Gemini (Antigravity CLI) connected · 3 models')).toBeVisible();
+    await page.screenshot({ path: `${shots}/23-bridge-connect.png` });
+
+    await s.getByRole('navigation').getByRole('button', { name: 'Usage', exact: true }).click();
+    await s.getByRole('tablist', { name: 'AI provider' }).getByRole('tab', { name: 'Gemini' }).click();
+    const block = s.getByRole('region', { name: 'Gemini (Antigravity CLI) API usage' });
+    await expect(block.getByText('Signed-in app')).toBeVisible();
+    // Bridged apps are not listed under "Other".
+    await s.getByRole('tablist', { name: 'AI provider' }).getByRole('tab', { name: 'Other' }).click();
+    await expect(s.getByText('Gemini (Antigravity CLI)')).toHaveCount(0);
+  });
+
+  test('profile menu opens usage, providers and settings; xAI (Grok) gets its own theme', async ({ page }) => {
+    await page.getByRole('button', { name: 'Profile and settings' }).click();
+    const menu = page.getByRole('menu', { name: 'Profile' });
+    await expect(menu.getByText('Alex')).toBeVisible();
+    await expect(menu.getByText('Local profile · no Conductor account')).toBeVisible();
+    await expect(menu.getByText('OpenAI')).toBeVisible(); // usage at a glance
+    await page.screenshot({ path: `${shots}/24-profile-menu.png` });
+    await menu.getByRole('menuitem', { name: 'Providers & accounts' }).click();
+    const s = page.getByRole('dialog', { name: 'Settings' });
+    await expect(s.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
+    await expect(menu).toBeHidden();
+    // Add xAI with an API key; the base URL is fixed, so it isn't asked for.
+    await s.getByRole('button', { name: 'Add provider' }).click();
+    await s.getByRole('radio', { name: 'xAI (Grok)' }).click();
+    await expect(s.getByLabel('Base URL')).toHaveCount(0);
+    await s.getByLabel('API key').fill('xai-test-key');
+    await s.getByRole('button', { name: 'Test & connect' }).click();
+    await expect(page.getByText('xAI (Grok) connected · 2 models')).toBeVisible();
+    await s.getByRole('navigation').getByRole('button', { name: 'Usage', exact: true }).click();
+    await s.getByRole('tablist', { name: 'AI provider' }).getByRole('tab', { name: 'Grok' }).click();
+    await expect(s.getByTestId('usage-panel')).toHaveAttribute('data-brand', 'grok');
+    await expect(s.getByRole('region', { name: 'xAI (Grok) API usage' })).toBeVisible();
+    await page.screenshot({ path: `${shots}/25-usage-grok.png` });
+    // Escape closes the menu without side effects.
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Profile and settings' }).click();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu', { name: 'Profile' })).toBeHidden();
+  });
+
   test('full access is obvious and revocable', async ({ page }) => {
     await page.getByRole('button', { name: /^Permissions:/ }).click();
     await page.getByRole('radio', { name: /Full Access/ }).click();
@@ -242,6 +348,18 @@ test.describe('daily use', () => {
     await page.screenshot({ path: `${shots}/14-combo-editor.png` });
     await editor.getByRole('button', { name: 'Save Combo' }).click();
     await expect(s.getByText('Review heavy')).toBeVisible();
+  });
+
+  test('MCP: a remote connector connects by URL with one click', async ({ page }) => {
+    await openSettings(page);
+    const s = page.getByRole('dialog', { name: 'Settings' });
+    await s.getByRole('navigation').getByRole('button', { name: 'MCP, skills & plugins', exact: true }).click();
+    await s.getByLabel('Connector URL').fill('https://mcp.linear.app/mcp');
+    await s.getByRole('button', { name: 'Connect', exact: true }).click();
+    await expect(page.getByText('linear connected', { exact: true })).toBeVisible();
+    await expect(s.getByText('linear connected · 21 tool(s)')).toBeVisible();
+    await expect(s.getByRole('button', { name: 'Sign in' })).toBeVisible();
+    await page.screenshot({ path: `${shots}/27-remote-connector.png` });
   });
 
   test('MCP: catalog search and install with doctor result', async ({ page }) => {

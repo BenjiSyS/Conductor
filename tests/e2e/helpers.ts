@@ -25,3 +25,12 @@ export async function openProject(page: Page, path = 'C:\\Projects\\demo-app') {
   await page.getByRole('button', { name: 'Open folder' }).first().click();
   await expect(page.getByRole('heading', { name: 'demo-app', exact: true })).toBeVisible();
 }
+
+/** Open Settings from the profile menu (bottom of the sidebar). */
+export async function openSettings(page: Page) {
+  await page.getByRole('button', { name: 'Profile and settings' }).click();
+  await page
+    .getByRole('menu', { name: 'Profile' })
+    .getByRole('menuitem', { name: /^Settings/ })
+    .click();
+}

@@ -1,0 +1,86 @@
+name: Release
+# Builds installers for every desktop OS and attaches them to a GitHub
+# release. Run by pushing a tag like v0.1.0, or manually for an existing tag.
+#
+#   Windows 10/11 (x64)        .msi and setup .exe
+#   macOS (Apple Silicon, Intel) .dmg
+#   Linux (x64)                .deb (Debian, Ubuntu, Kali, Mint, Pop!_OS)
+#                              .rpm (Fedora, RHEL, openSUSE)
+#                              .AppImage (any distribution, incl. Arch)
+#
+# Linux packages are built on Ubuntu 22.04 so they run on older glibc too.
+# Builds are not code-signed yet: Windows SmartScreen and macOS Gatekeeper
+# show a warning on first launch (see docs/RELEASES.md).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build (e.g. v0.1.0)
+        required: true
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: msi,nsis
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev xdg-utils rpm
+      - run: npm ci
+      - name: Build and attach installers
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
+          APPLE_SIGNING_IDENTITY: '-'
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: Conductor ${{ inputs.tag || github.ref_name }}
+          releaseBody: |
+            Download the file for your computer:
+
+            | Your computer | Download |
+            |---|---|
+            | Windows 10 or 11 | `Conductor_*_x64-setup.exe` (or the `.msi`) |
+            | Mac with Apple Silicon (M1–M4) | `Conductor_*_aarch64.dmg` |
+            | Mac with Intel | `Conductor_*_x64.dmg` |
+            | Ubuntu, Debian, Kali, Mint | `conductor_*_amd64.deb` |
+            | Fedora, RHEL, openSUSE | `conductor-*.x86_64.rpm` |
+            | Any other Linux (Arch, …) | `conductor_*_amd64.AppImage` |
+
+            These builds aren't code-signed yet. Windows may show "Windows protected your PC" (choose More info → Run anyway); on macOS, right-click the app and choose Open the first time.
+          releaseDraft: false
+          prerelease: true
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config ../../.github/unsigned-tauri.json

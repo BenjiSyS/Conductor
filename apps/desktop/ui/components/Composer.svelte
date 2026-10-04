@@ -65,6 +65,42 @@
     queueMicrotask(autosize);
   });
 
+  // Large pastes are saved by the app and shown as a short chip, so the box
+  // never holds megabytes of text (5 MB+ pastes stay responsive).
+  const PASTE_CHIP_CHARS = 8_000;
+  const MAX_DRAFT_CHARS = 60_000;
+  let pasteCount = 0;
+  let pasting = $state(false);
+  async function chipFor(text: string): Promise<string | null> {
+    pasting = true;
+    try {
+      const info = await call<{ id: string; chars: number; lines: number }>('save_paste', { text });
+      pasteCount += 1;
+      return `[Pasted text #${pasteCount} · ${info.chars.toLocaleString()} chars · ${info.lines.toLocaleString()} lines · paste:${info.id}]`;
+    } catch (e) {
+      toast(readable(e), 'error');
+      return null;
+    } finally {
+      pasting = false;
+    }
+  }
+  async function paste(e: ClipboardEvent) {
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    if (text.length < PASTE_CHIP_CHARS) return;
+    e.preventDefault();
+    const el = textarea;
+    const start = el?.selectionStart ?? app.draft.length;
+    const end = el?.selectionEnd ?? app.draft.length;
+    const chip = await chipFor(text);
+    if (!chip) return;
+    app.draft = app.draft.slice(0, start) + chip + app.draft.slice(end);
+    queueMicrotask(() => {
+      autosize();
+      const at = start + chip.length;
+      textarea?.setSelectionRange(at, at);
+    });
+  }
+
   function key(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
@@ -73,7 +109,13 @@
   }
 
   async function submit() {
-    if (!app.draft.trim()) return;
+    if (!app.draft.trim() || pasting) return;
+    // A very long typed draft is sent as a saved paste too.
+    if (app.draft.length > MAX_DRAFT_CHARS) {
+      const chip = await chipFor(app.draft);
+      if (!chip) return;
+      app.draft = chip;
+    }
     if (!app.target) {
       toast('Connect a provider and choose a model first.', 'info', {
         label: 'Connect',
@@ -188,6 +230,7 @@
       bind:value={app.draft}
       onkeydown={key}
       oninput={autosize}
+      onpaste={paste}
       rows="1"
       placeholder={app.mode === 'goal'
         ? 'Describe the outcome you want…'

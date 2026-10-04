@@ -1,4 +1,8 @@
 <script lang="ts">
+  import SetupStatus from './SetupStatus.svelte';
+  import { call as callSetup } from '../lib/api';
+  // Start checking the computer the moment the wizard opens.
+  void callSetup('setup_prepare').catch(() => {});
   import { Check, Turtle, Scale, Rocket, Shield, ShieldCheck, ShieldAlert, Layers, Cpu } from '@lucide/svelte';
   import { app, attempt, ensureTarget, openProjectDialog, refresh, saveSettings, savePrefs } from '../lib/app.svelte';
   import { call } from '../lib/api';
@@ -71,6 +75,7 @@
             Let several AI models work together on your goals — while you stay in control. No account needed; everything
             stays on this computer.
           </p>
+          <SetupStatus />
         </div>
       {:else if step === 1}
         <h2>How hard should Conductor push this machine?</h2>

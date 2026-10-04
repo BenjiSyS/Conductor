@@ -67,10 +67,9 @@ impl Service {
 /// Public OAuth client of each vendor's CLI. These identify the CLI, not a
 /// user, and are published in the CLIs' sources.
 ///
-/// Google's installed-app flow also needs a client secret. Conductor does not
-/// ship one: set `CONDUCTOR_GEMINI_OAUTH_CLIENT_ID` and
-/// `CONDUCTOR_GEMINI_OAUTH_CLIENT_SECRET` to a Google "Desktop app" OAuth
-/// client (your own, or Gemini CLI's published one).
+/// Google's installed-app flow also needs a client secret; Gemini CLI's
+/// published one is built in. `CONDUCTOR_GEMINI_OAUTH_CLIENT_ID` and
+/// `CONDUCTOR_GEMINI_OAUTH_CLIENT_SECRET` override it.
 struct OAuthClient {
     client_id: String,
     client_secret: Option<String>,
@@ -93,17 +92,15 @@ fn oauth_client(service: Service) -> Result<OAuthClient> {
             scopes: "openid profile email offline_access",
         },
         Service::Gemini => {
+            // Gemini CLI's published installed-app client (Apache-2.0
+            // google-gemini/gemini-cli). Google documents installed-app
+            // client secrets as not confidential. Override with your own
+            // "Desktop app" client via the environment if you prefer.
             let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
-            let (Some(client_id), Some(secret)) =
-                (var(GEMINI_CLIENT_ID_ENV), var(GEMINI_CLIENT_SECRET_ENV))
-            else {
-                return Err(format!(
-                    "Gemini sign-in needs a Google OAuth client. Set {GEMINI_CLIENT_ID_ENV} and {GEMINI_CLIENT_SECRET_ENV}, then restart Conductor."
-                ));
-            };
             OAuthClient {
-                client_id,
-                client_secret: Some(secret),
+                client_id: var(GEMINI_CLIENT_ID_ENV)
+                    .unwrap_or_else(|| "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com".into()),
+                client_secret: Some(var(GEMINI_CLIENT_SECRET_ENV).unwrap_or_else(|| "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".into())),
                 scopes: "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
             }
         }
@@ -343,12 +340,16 @@ pub async fn begin(service: Service, endpoints: Endpoints) -> Result<Pending> {
 
 const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Conductor</title><body style=\"font:16px system-ui;display:grid;place-items:center;height:90vh\"><p>Signed in to Conductor. You can close this tab.</p>";
 
-/// Wait for the browser callback, check `state`, and exchange the code.
-pub async fn finish(pending: Pending, timeout: Duration) -> Result<Tokens> {
-    let path = callback_path(pending.service);
+/// Wait for one browser callback on `path`, check `state`, return the code.
+pub(crate) async fn wait_for_code(
+    listener: &TcpListener,
+    path: &str,
+    state: &str,
+    timeout: Duration,
+) -> Result<String> {
     let wait = async {
         loop {
-            let (mut sock, _) = pending.listener.accept().await.map_err(|e| e.to_string())?;
+            let (mut sock, _) = listener.accept().await.map_err(|e| e.to_string())?;
             let mut buf = vec![0u8; 8192];
             let n = sock.read(&mut buf).await.unwrap_or(0);
             let head = String::from_utf8_lossy(&buf[..n]);
@@ -377,7 +378,7 @@ pub async fn finish(pending: Pending, timeout: Duration) -> Result<Tokens> {
                     format!("<p>Sign-in failed: {}</p>", html_escape(&msg)),
                     Err(format!("Sign-in was not completed: {msg}")),
                 )
-            } else if q.get("state") != Some(&pending.state) {
+            } else if q.get("state").map(String::as_str) != Some(state) {
                 (
                     "400 Bad Request",
                     "<p>Sign-in failed: the response did not match this request.</p>".to_string(),
@@ -403,9 +404,15 @@ pub async fn finish(pending: Pending, timeout: Duration) -> Result<Tokens> {
             return result;
         }
     };
-    let code = tokio::time::timeout(timeout, wait)
+    tokio::time::timeout(timeout, wait)
         .await
-        .map_err(|_| "Sign-in timed out. Try again.".to_string())??;
+        .map_err(|_| "Sign-in timed out. Try again.".to_string())?
+}
+
+/// Wait for the browser callback, check `state`, and exchange the code.
+pub async fn finish(pending: Pending, timeout: Duration) -> Result<Tokens> {
+    let path = callback_path(pending.service);
+    let code = wait_for_code(&pending.listener, path, &pending.state, timeout).await?;
     exchange(
         pending.service,
         &pending.endpoints,

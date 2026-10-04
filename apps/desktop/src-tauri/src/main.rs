@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bridge;
 mod chat;
 mod cmds;
+mod extras;
 mod prefs;
 mod state;
 mod usage;
@@ -48,6 +50,50 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+fn remote_engine_event(
+    state: &AppState,
+    event: &conductor_engine::EngineEvent,
+) -> Option<serde_json::Value> {
+    use conductor_engine::EngineEvent;
+    let project = match event {
+        EngineEvent::Goal { goal_id, .. }
+        | EngineEvent::GoalSaved { goal_id, .. }
+        | EngineEvent::Delta {
+            goal_id: Some(goal_id),
+            ..
+        }
+        | EngineEvent::Tool {
+            goal_id: Some(goal_id),
+            ..
+        }
+        | EngineEvent::Approval {
+            goal_id: Some(goal_id),
+            ..
+        } => state.goals.get(goal_id)?.project_id,
+        EngineEvent::Delta {
+            goal_id: None,
+            task_id,
+            ..
+        }
+        | EngineEvent::Tool {
+            goal_id: None,
+            task_id,
+            ..
+        } => {
+            let id = task_id.strip_prefix("chat-")?;
+            let conversation: conductor_core::domain::Conversation =
+                state.store.get("conversation", id).ok()??;
+            conversation.project_id
+        }
+        // Unscoped approvals and resolution events cannot safely be exposed
+        // remotely until their originating project is carried explicitly.
+        _ => return None,
+    };
+    let mut value = serde_json::to_value(event).ok()?;
+    value["project"] = serde_json::Value::String(project);
+    Some(value)
+}
+
 fn main() {
     let started = std::time::Instant::now();
     // One instance per data folder: isolated test/portable data dirs may run
@@ -60,6 +106,7 @@ fn main() {
     }
     let builder = builder
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--background"]),
@@ -125,6 +172,8 @@ fn main() {
             };
             state.mark("state ready");
             app.manage(state);
+            bridge::start(app.handle());
+            extras::start(app.handle());
 
             // Main window. Isolated (CONDUCTOR_DATA_DIR) and portable data
             // folders keep their own WebView2/WebKit profile inside them.
@@ -154,7 +203,7 @@ fn main() {
                             let _ = handle.emit("engine", &ev);
                             if let Some(st) = handle.try_state::<AppState>() {
                                 if let Some(h) = st.host.lock().await.as_ref() {
-                                    if let Ok(v) = serde_json::to_value(&ev) {
+                                    if let Some(v) = remote_engine_event(&st, &ev) {
                                         h.publish(v);
                                     }
                                 }
@@ -291,6 +340,16 @@ fn main() {
             cmds::app_info,
             cmds::prefs_get,
             usage::usage_overview,
+            bridge::cli_bridges,
+            extras::save_paste,
+            extras::test_notification,
+            extras::profile_info,
+            extras::setup_prepare,
+            extras::setup_scan,
+            extras::env_install,
+            extras::mcp_connect_remote,
+            extras::mcp_sign_in,
+            bridge::cli_bridge_connect,
             usage::subscription_sign_in,
             usage::subscription_usage,
             usage::subscription_sign_out,

@@ -1,7 +1,6 @@
 <script lang="ts">
   import {
     Plus,
-    Settings,
     ChevronDown,
     FolderOpen,
     FolderPlus,
@@ -27,6 +26,7 @@
   import { call } from '../lib/api';
   import { ago, keyLabel } from '../lib/format';
   import Logo from './Logo.svelte';
+  import ProfileMenu from './ProfileMenu.svelte';
 
   let menuOpen = $state(false);
 
@@ -214,12 +214,7 @@
         />Auto Approve{:else}<Shield size={14} />Ask{/if}
     </button>
     <span class="spacer"></span>
-    <button
-      class="btn ghost icon"
-      aria-label="Settings"
-      title="Settings ({keyLabel('Mod+,')})"
-      onclick={() => (app.settingsTab = 'general')}><Settings size={16} /></button
-    >
+    <ProfileMenu />
   </div>
 </nav>
 

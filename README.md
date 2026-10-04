@@ -6,6 +6,10 @@ An open-source, local-first workspace for AI-assisted development. Choose a mode
 
 **Development status:** Conductor is being built against the [full product specification](docs/CONDUCTOR_MASTER_BUILD_PROMPT.md). It is not yet a verified v1 release. The [implementation audit](docs/IMPLEMENTATION_AUDIT.md) preserves every requirement; the [verification record](docs/VERIFICATION.md) distinguishes passing checks from work still unverified.
 
+## Download
+
+Get the installer for your computer from the [latest release](https://github.com/BenjiSyS/Conductor/releases): `.exe`/`.msi` for Windows 10 and 11, `.dmg` for macOS (Apple Silicon or Intel), `.deb` for Debian, Ubuntu and Kali, `.rpm` for Fedora and openSUSE, and `.AppImage` for any other Linux. Builds are not code-signed yet, so the first launch shows a system warning.
+
 ## Build from source
 
 Requirements: Git, a current stable Rust toolchain, Node.js 22 or newer with npm, and the [Tauri desktop prerequisites](https://v2.tauri.app/start/prerequisites/). Windows needs the Visual Studio C++ build tools and WebView2. Linux needs WebKitGTK 4.1 and native development libraries. macOS needs Xcode command-line tools.
@@ -45,7 +49,13 @@ The browser development server (`npm run dev`, http://127.0.0.1:1420) is for fro
 
 Provider requests send the selected prompt and context to that provider. Review the Context Inspector and [privacy documentation](docs/PRIVACY.md). Secret detection reduces exposure but cannot identify every possible secret.
 
-Provider API adapters cover OpenAI, Anthropic, Google Gemini and OpenAI-compatible endpoints. Protocol fixtures and deterministic checks are separate from live API-key tests. OAuth and subscription integrations require official support and successful end-to-end evidence before they can be advertised. See [provider adapters and authentication](docs/PROVIDERS.md).
+Ways to connect a model:
+
+- **API key:** OpenAI, Anthropic, Google Gemini, xAI (Grok) and any OpenAI-compatible endpoint.
+- **An AI app you're already signed in to (no key):** Antigravity CLI (Gemini), Codex CLI (ChatGPT) or Claude Code. Conductor runs the app the way you would in a terminal and never reads its credentials. Your plan is preferred by routing because it's already paid for.
+- **Local models, fully offline:** Ollama or LM Studio are found automatically during setup. With a local model, Conductor needs no internet at all.
+
+**Usage** (Settings › Usage, or the profile menu) shows provider-reported limits per provider in that provider's own theme. An opt-in, unsupported sign-in for Claude, ChatGPT and Gemini plans adds 5-hour and weekly meters, with a desktop notification below 10% left. Remote **MCP connectors** connect by URL; when a connector needs an account its sign-in page opens (MCP OAuth with automatic client registration). See [provider adapters and authentication](docs/PROVIDERS.md).
 
 ## Working concepts
 

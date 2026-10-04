@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EffortSlider from '../EffortSlider.svelte';
   import { Plus, Copy, Trash2, Download, Upload, Star, Layers } from '@lucide/svelte';
   import { app, attempt, refresh, succeeded, toast } from '../../lib/app.svelte';
   import { call } from '../../lib/api';
@@ -188,10 +189,13 @@
               {/each}
             </td>
             <td>
-              <select class="select" bind:value={m.effort} aria-label="Effort">
-                <option value={null}>Auto</option>
-                {#each effortsFor(m.model) as e (e)}<option value={e}>{e}</option>{/each}
-              </select>
+              <EffortSlider
+                levels={effortsFor(m.model)}
+                value={m.effort}
+                label="Effort for {m.model}"
+                compact
+                onchange={(v) => (m.effort = v)}
+              />
             </td>
             <td><Toggle checked={m.enabled} label="Enabled" onchange={(v) => (m.enabled = v)} /></td>
             <td

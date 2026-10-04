@@ -4,13 +4,15 @@
   import Toggle from '../Toggle.svelte';
   import type { Permission } from '../../lib/types';
 
-  const categories: [string, string][] = [
-    ['filesystem.write', 'Create and edit files'],
-    ['filesystem.delete', 'Delete files'],
-    ['terminal.execute', 'Run commands'],
-    ['git.write', 'Commit and branch'],
-    ['network', 'Network access'],
-    ['install.software', 'Install software'],
+  const categories: [string, string, string][] = [
+    ['filesystem.write', 'Create and edit files', 'Change files in the selected project.'],
+    ['filesystem.delete', 'Delete files', 'Remove files in the selected project.'],
+    ['terminal.execute', 'Run commands', 'Run programs with your user account.'],
+    ['git.write', 'Commit and branch', 'Create commits and branches in the project.'],
+    ['network', 'Network access', 'Contact websites and local services.'],
+    ['mcp', 'MCP tools', 'Use tools from enabled integrations.'],
+    ['secrets.use', 'Use saved integration credentials', 'Pass referenced credentials to the selected integration.'],
+    ['install.software', 'Install software', 'Install tools needed by the project.'],
   ];
   const levels: { id: Permission; label: string; desc: string; icon: typeof Shield }[] = [
     { id: 'ask', label: 'Ask', desc: 'Approve every action beyond reading.', icon: Shield },
@@ -56,11 +58,11 @@
 
 {#if app.settings.permission === 'auto_approve'}
   <h3 class="sub">Approve automatically</h3>
-  {#each categories as [id, label] (id)}
+  {#each categories as [id, label, description] (id)}
     <div class="setting">
       <div class="text">
         <strong>{label}</strong>
-        <p class="mono">{id}</p>
+        <p>{description}</p>
       </div>
       <Toggle checked={app.settings.auto_approve.includes(id)} {label} onchange={(v) => toggleCat(id, v)} />
     </div>

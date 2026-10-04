@@ -1,4 +1,5 @@
 use crate::{domain::*, Error, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -320,6 +321,26 @@ pub fn request_body(config: &ProviderConfig, request: &ProviderRequest) -> Resul
         .iter()
         .find(|m| m.id == request.model)
         .ok_or_else(|| Error::Invalid("Choose a model from the provider catalog".into()))?;
+    if request
+        .messages
+        .iter()
+        .any(|message| message.role == Role::System && !message.images.is_empty())
+    {
+        return Err(Error::Invalid(
+            "System messages cannot contain image attachments".into(),
+        ));
+    }
+    validate_images(&request.messages)?;
+    if request
+        .messages
+        .iter()
+        .any(|message| !message.images.is_empty())
+        && !model.vision
+    {
+        return Err(Error::Invalid(
+            "Selected model does not declare image input support".into(),
+        ));
+    }
     if let Some(effort) = &request.effort {
         if !model.efforts.contains(effort) {
             return Err(Error::Invalid(
@@ -337,10 +358,15 @@ pub fn request_body(config: &ProviderConfig, request: &ProviderRequest) -> Resul
             ));
         }
     }
-    let messages:Vec<_> = request.messages.iter().filter(|m|m.role!=Role::System).map(|m|json!({"role":if m.role==Role::User {"user"}else{"assistant"},"content":crate::context::redact(&m.text)})).collect();
     let instructions = crate::context::redact(&request.instructions);
     Ok(match config.kind {
         ProviderKind::Anthropic => {
+            let messages: Vec<_> = request.messages.iter().filter(|m|m.role!=Role::System).map(|m| {
+                if m.images.is_empty() { return json!({"role":if m.role==Role::User {"user"}else{"assistant"},"content":crate::context::redact(&m.text)}); }
+                let mut content = vec![json!({"type":"text","text":crate::context::redact(&m.text)})];
+                content.extend(m.images.iter().map(|image| json!({"type":"image","source":{"type":"base64","media_type":image.mime_type,"data":image.data}})));
+                json!({"role":if m.role==Role::User {"user"}else{"assistant"},"content":content})
+            }).collect();
             let mut body = json!({"model":request.model,"messages":messages,"system":instructions,"max_tokens":4096,"stream":true});
             if let Some(effort) = &request.effort {
                 if !["low", "medium", "high", "xhigh", "max"].contains(&effort.as_str()) {
@@ -351,9 +377,32 @@ pub fn request_body(config: &ProviderConfig, request: &ProviderRequest) -> Resul
             body
         }
         ProviderKind::Gemini => {
-            json!({"systemInstruction":{"parts":[{"text":instructions}]},"contents":request.messages.iter().filter(|m|m.role!=Role::System).map(|m|json!({"role":if m.role==Role::User {"user"}else{"model"},"parts":[{"text":crate::context::redact(&m.text)}]})).collect::<Vec<_>>()})
+            json!({"systemInstruction":{"parts":[{"text":instructions}]},"contents":request.messages.iter().filter(|m|m.role!=Role::System).map(|m| {
+                let mut parts = vec![json!({"text":crate::context::redact(&m.text)})];
+                parts.extend(m.images.iter().map(|image| json!({"inlineData":{"mimeType":image.mime_type,"data":image.data}})));
+                json!({"role":if m.role==Role::User {"user"}else{"model"},"parts":parts})
+            }).collect::<Vec<_>>()})
         }
         ProviderKind::Openai => {
+            let messages: Vec<_> = request
+                .messages
+                .iter()
+                .filter(|message| message.role != Role::System)
+                .map(|message| {
+                    let role = if message.role == Role::User {
+                        "user"
+                    } else {
+                        "assistant"
+                    };
+                    if message.images.is_empty() {
+                        json!({"role":role,"content":crate::context::redact(&message.text)})
+                    } else {
+                        let mut content = vec![json!({"type":"input_text","text":crate::context::redact(&message.text)})];
+                        content.extend(message.images.iter().map(|image| json!({"type":"input_image","image_url":format!("data:{};base64,{}", image.mime_type, image.data)})));
+                        json!({"role":role,"content":content})
+                    }
+                })
+                .collect();
             let mut body = json!({"model":request.model,"instructions":instructions,"input":messages,"stream":true,"store":false});
             if let Some(effort) = &request.effort {
                 body["reasoning"] = json!({"effort":effort});
@@ -362,7 +411,15 @@ pub fn request_body(config: &ProviderConfig, request: &ProviderRequest) -> Resul
         }
         ProviderKind::OpenaiCompatible => {
             let mut all = vec![json!({"role":"system","content":instructions})];
-            all.extend(messages);
+            all.extend(request.messages.iter().filter(|m|m.role!=Role::System).map(|m| {
+                let role = if m.role==Role::User {"user"} else {"assistant"};
+                if m.images.is_empty() { json!({"role":role,"content":crate::context::redact(&m.text)}) }
+                else {
+                    let mut content = vec![json!({"type":"text","text":crate::context::redact(&m.text)})];
+                    content.extend(m.images.iter().map(|image| json!({"type":"image_url","image_url":{"url":format!("data:{};base64,{}", image.mime_type, image.data)}})));
+                    json!({"role":role,"content":content})
+                }
+            }));
             let mut body = json!({"model":request.model,"messages":all,"stream":true});
             if let Some(effort) = &request.effort {
                 body["reasoning_effort"] = json!(effort);
@@ -370,6 +427,56 @@ pub fn request_body(config: &ProviderConfig, request: &ProviderRequest) -> Resul
             body
         }
     })
+}
+
+const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+const MAX_MESSAGE_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_MESSAGE_IMAGES: usize = 10;
+
+pub(crate) fn validate_images(messages: &[Message]) -> Result<()> {
+    let mut aggregate = 0usize;
+    let mut count = 0usize;
+    for image in messages.iter().flat_map(|message| &message.images) {
+        count += 1;
+        if count > MAX_MESSAGE_IMAGES {
+            return Err(Error::Invalid("Request exceeds image count limit".into()));
+        }
+        if !["image/png", "image/jpeg", "image/webp"].contains(&image.mime_type.as_str()) {
+            return Err(Error::Invalid(
+                "Image must use PNG, JPEG, or WebP format".into(),
+            ));
+        }
+        // Bound encoded data before decoding, then validate canonical base64 and magic bytes.
+        if image.data.is_empty() || image.data.len() > MAX_IMAGE_BYTES.div_ceil(3) * 4 {
+            return Err(Error::Invalid("Image exceeds size limit".into()));
+        }
+        let bytes = STANDARD
+            .decode(&image.data)
+            .map_err(|_| Error::Invalid("Image data is malformed base64".into()))?;
+        if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+            return Err(Error::Invalid("Image exceeds size limit".into()));
+        }
+        let valid = match image.mime_type.as_str() {
+            "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+            "image/webp" => {
+                bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(Error::Invalid(
+                "Image data does not match its MIME type".into(),
+            ));
+        }
+        aggregate = aggregate.saturating_add(bytes.len());
+        if aggregate > MAX_MESSAGE_IMAGE_BYTES {
+            return Err(Error::Invalid(
+                "Request exceeds total image size limit".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 struct DecodedFrame {
@@ -685,6 +792,107 @@ mod tests {
             effort: None,
             allow_highest_effort: false,
         }
+    }
+    fn image_request() -> ProviderRequest {
+        let mut request = request();
+        request.messages[0].images.push(ImageAttachment {
+            mime_type: "image/png".into(),
+            // Valid one-pixel PNG fixture.
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6WQAAAAASUVORK5CYII=".into(),
+        });
+        request
+    }
+    fn vision_config(kind: ProviderKind) -> ProviderConfig {
+        let mut config = custom("https://localhost/".into());
+        config.kind = kind;
+        config.models[0].vision = true;
+        config
+    }
+
+    #[test]
+    fn image_parts_map_to_all_provider_protocols_without_redacting_bytes() -> Result<()> {
+        let request = image_request();
+        let openai = request_body(&vision_config(ProviderKind::Openai), &request)?;
+        assert_eq!(openai["input"][0]["content"][1]["type"], "input_image");
+        assert_eq!(
+            openai["input"][0]["content"][1]["image_url"]
+                .as_str()
+                .unwrap(),
+            format!(
+                "data:image/png;base64,{}",
+                request.messages[0].images[0].data
+            )
+        );
+        let anthropic = request_body(&vision_config(ProviderKind::Anthropic), &request)?;
+        assert_eq!(
+            anthropic["messages"][0]["content"][1]["source"]["data"],
+            request.messages[0].images[0].data
+        );
+        let gemini = request_body(&vision_config(ProviderKind::Gemini), &request)?;
+        assert_eq!(
+            gemini["contents"][0]["parts"][1]["inlineData"]["data"],
+            request.messages[0].images[0].data
+        );
+        assert_eq!(
+            gemini["contents"][0]["parts"][1]["inlineData"]["mimeType"],
+            "image/png"
+        );
+        let compatible = request_body(&vision_config(ProviderKind::OpenaiCompatible), &request)?;
+        assert_eq!(compatible["messages"][1]["content"][1]["type"], "image_url");
+        assert!(compatible["messages"][1]["content"][1]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .ends_with(&request.messages[0].images[0].data));
+        Ok(())
+    }
+
+    #[test]
+    fn image_validation_checks_format_data_limits_and_model_capability() -> Result<()> {
+        let config = vision_config(ProviderKind::Openai);
+        assert!(request_body(&config, &image_request()).is_ok());
+        let mut bad = image_request();
+        bad.messages[0].images[0].data = "not base64".into();
+        assert!(matches!(
+            request_body(&config, &bad),
+            Err(Error::Invalid(_))
+        ));
+        let mut mismatched = image_request();
+        mismatched.messages[0].images[0].mime_type = "image/jpeg".into();
+        assert!(matches!(
+            request_body(&config, &mismatched),
+            Err(Error::Invalid(_))
+        ));
+        let mut too_many = image_request();
+        too_many.messages[0].images =
+            vec![too_many.messages[0].images[0].clone(); MAX_MESSAGE_IMAGES + 1];
+        assert!(matches!(
+            request_body(&config, &too_many),
+            Err(Error::Invalid(_))
+        ));
+        let mut no_vision = config.clone();
+        no_vision.models[0].vision = false;
+        assert!(matches!(
+            request_body(&no_vision, &image_request()),
+            Err(Error::Invalid(_))
+        ));
+        let mut system_image = image_request();
+        system_image.messages[0].role = Role::System;
+        assert!(matches!(
+            request_body(&config, &system_image),
+            Err(Error::Invalid(message)) if message.contains("System messages")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn messages_deserialize_legacy_records_without_images() -> Result<()> {
+        let mut value = serde_json::to_value(Message::new(Role::User, "hello".into()))?;
+        value.as_object_mut().unwrap().remove("images");
+        let message: Message = serde_json::from_value(value)?;
+        assert!(message.images.is_empty());
+        let legacy_body = request_body(&custom("https://localhost/".into()), &request())?;
+        assert_eq!(legacy_body["messages"][1]["content"], "hello");
+        Ok(())
     }
     #[test]
     fn sse_handles_every_byte_boundary_multiline_and_crlf() -> Result<()> {

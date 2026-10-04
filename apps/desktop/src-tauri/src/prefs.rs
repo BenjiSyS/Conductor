@@ -42,6 +42,12 @@ pub struct Prefs {
     pub emergency_shortcut: String,
     /// Opt-in, unsupported subscription sign-in (Claude, ChatGPT, Gemini).
     pub subscription_signin: bool,
+    /// Desktop notification when work finishes.
+    pub notify_done: bool,
+    /// Play a ding with notifications.
+    pub notify_sound: bool,
+    /// Warn when a plan window has under 10% left.
+    pub notify_low_usage: bool,
     pub seen_resume: BTreeMap<String, u64>,
 }
 
@@ -86,6 +92,9 @@ impl Default for Prefs {
             // Cmd+Alt+Esc by macOS (Force Quit), so use a free chord.
             emergency_shortcut: DEFAULT_EMERGENCY_SHORTCUT.into(),
             subscription_signin: false,
+            notify_done: true,
+            notify_sound: true,
+            notify_low_usage: true,
             seen_resume: BTreeMap::new(),
         }
     }

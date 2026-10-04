@@ -19,6 +19,18 @@ Anthropic catalog `display_name`, `max_input_tokens`, image capability and indiv
 
 Protocol references: [OpenAI Responses](https://platform.openai.com/docs/api-reference/responses), [Anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming), [Gemini generation](https://ai.google.dev/api/generate-content).
 
+Messages now support `images: [{ mime_type, data }]`, with standard base64 PNG,
+JPEG or WebP data. Legacy records deserialize with an empty image list. The
+request requires declared vision support and rejects System-message images,
+invalid base64, MIME/signature mismatches, more than 10 images, over 5 MiB per
+decoded image or over 10 MiB total. Signature checks do not fully decode images.
+OpenAI Responses uses `input_image`; Anthropic uses base64 image sources;
+Gemini uses canonical REST `inlineData`/`mimeType`; compatible providers use
+image URL parts. Protocol fixtures cover all four adapters. This is transport
+support; native screenshot control and live provider acceptance require their
+own evidence. Text redaction does not redact pixels or perform OCR. Images
+persist as base64 in conversation records, increasing storage size.
+
 ## Authentication gates
 
 Fixture tests verify requests, headers, decoding, cancellation, rate limits and rejection behavior. They do **not** prove a live account or OS credential manager works. Before claiming production readiness, record each provider's valid/invalid/revoked key, network failure, rate limit, restart, reconnect and interrupted-task resume tests.
