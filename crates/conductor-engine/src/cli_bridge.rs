@@ -32,16 +32,19 @@ pub enum Cli {
     Agy,
     Codex,
     Claude,
+    /// xAI's Grok Build CLI (`grok`), signed in with a SuperGrok / X Premium+ account.
+    Grok,
 }
 
 impl Cli {
-    pub const ALL: [Cli; 3] = [Cli::Agy, Cli::Codex, Cli::Claude];
+    pub const ALL: [Cli; 4] = [Cli::Agy, Cli::Codex, Cli::Claude, Cli::Grok];
 
     pub fn id(self) -> &'static str {
         match self {
             Cli::Agy => "agy",
             Cli::Codex => "codex",
             Cli::Claude => "claude",
+            Cli::Grok => "grok",
         }
     }
     pub fn parse(id: &str) -> Option<Self> {
@@ -53,6 +56,7 @@ impl Cli {
             Cli::Agy => "Gemini (Antigravity CLI)",
             Cli::Codex => "ChatGPT (Codex CLI)",
             Cli::Claude => "Claude (Claude Code)",
+            Cli::Grok => "Grok (Grok Build)",
         }
     }
     /// Which brand's theme the Usage view uses.
@@ -61,6 +65,7 @@ impl Cli {
             Cli::Agy => "gemini",
             Cli::Codex => "chatgpt",
             Cli::Claude => "claude",
+            Cli::Grok => "grok",
         }
     }
     /// How the user signs the app in, if it reports it isn't.
@@ -69,6 +74,16 @@ impl Cli {
             Cli::Agy => "Open a terminal, run `agy` and sign in with Google.",
             Cli::Codex => "Open a terminal and run `codex login`.",
             Cli::Claude => "Open a terminal, run `claude` and type /login.",
+            Cli::Grok => "Open a terminal and run `grok login`.",
+        }
+    }
+    /// The app's own sign-in command (opens the provider's sign-in page).
+    pub fn login_args(self) -> &'static [&'static str] {
+        match self {
+            Cli::Agy => &[], // Antigravity CLI signs in on first run
+            Cli::Codex => &["login"],
+            Cli::Claude => &["auth", "login"],
+            Cli::Grok => &["login"],
         }
     }
     pub fn provider_id(self) -> String {
@@ -120,6 +135,38 @@ fn command(cli: Cli, args: &[String]) -> Result<tokio::process::Command, String>
     Ok(cmd)
 }
 
+/// Whether the app reports being signed in; `None` when it can't tell.
+pub async fn signed_in(cli: Cli) -> Option<bool> {
+    let args: Vec<String> = match cli {
+        Cli::Codex => vec!["login".into(), "status".into()],
+        Cli::Claude => vec!["auth".into(), "status".into()],
+        _ => return None,
+    };
+    let mut c = command(cli, &args).ok()?;
+    c.stdin(Stdio::null());
+    let out = tokio::time::timeout(Duration::from_secs(20), c.output())
+        .await
+        .ok()?
+        .ok()?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some(match cli {
+        Cli::Claude => serde_json::from_str::<Value>(text.trim())
+            .ok()
+            .and_then(|v| v["loggedIn"].as_bool())
+            .unwrap_or(false),
+        _ => out.status.success() && text.to_ascii_lowercase().contains("logged in"),
+    })
+}
+
+/// Full path of the installed app, for opening its sign-in in a terminal.
+pub fn executable(cli: Cli) -> Option<PathBuf> {
+    resolve(cli)
+}
+
 /// Installed bridges, with their versions.
 pub async fn detect() -> Vec<Detected> {
     let mut out = vec![];
@@ -165,6 +212,9 @@ fn plain(ids: impl IntoIterator<Item = String>) -> Vec<BridgeModel> {
         .collect()
 }
 
+/// Effort levels Grok Build accepts (`--effort`).
+const GROK_EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
 /// Effort levels Conductor passes through to the apps.
 const EFFORTS: [&str; 7] = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
@@ -181,6 +231,11 @@ pub async fn models(cli: Cli) -> Vec<BridgeModel> {
         }
         // Aliases always point at the newest Sonnet / Opus.
         Cli::Claude => out.extend(plain(["sonnet".to_string(), "opus".to_string()])),
+        // Grok Build has no model-list command; "default" follows the CLI's
+        // own (newest) model, and the CLI accepts any API model id.
+        Cli::Grok => {
+            out[0].efforts = GROK_EFFORTS.iter().map(|e| e.to_string()).collect();
+        }
         Cli::Codex => {
             // Codex's own catalog for the signed-in account. Its configured
             // default may not be allowed for the account, so list real models.
@@ -384,7 +439,7 @@ pub fn invocation(
                 a.extend([s("-m"), m]);
             }
             if let Some(e) = effort {
-                a.extend([s("-c"), format!("model_reasoning_effort=\"{e}\"")]);
+                a.extend([s("-c"), format!("model_reasoning_effort={e}")]);
             }
             a.push(s("-"));
             (a, Some(prompt.into()))
@@ -405,6 +460,27 @@ pub fn invocation(
                 a.extend([s("--model"), m]);
             }
             (a, Some(prompt.into()))
+        }
+        Cli::Grok => {
+            // The prompt is written to prompt.txt in the run's scratch
+            // folder (see run_in), so it never touches the command line.
+            let mut a = vec![
+                s("--prompt-file"),
+                s("prompt.txt"),
+                s("--output-format"),
+                s("streaming-json"),
+                s("--max-turns"),
+                s("1"),
+                s("--disable-web-search"),
+                s("--no-auto-update"),
+            ];
+            if let Some(m) = model {
+                a.extend([s("--model"), m]);
+            }
+            if let Some(e) = effort.filter(|e| GROK_EFFORTS.contains(&e.as_str())) {
+                a.extend([s("--effort"), e]);
+            }
+            (a, None)
         }
     }
 }
@@ -510,6 +586,38 @@ impl Parser {
                 }
                 Some("turn.failed") => out.push(Event::Error(nested_message(&v["error"]))),
                 Some("error") => out.push(Event::Error(nested_message(&v))),
+                _ => {}
+            },
+            Cli::Grok => match v["type"].as_str() {
+                Some("text") => {
+                    if let Some(t) = v["data"].as_str().filter(|t| !t.is_empty()) {
+                        self.got_text = true;
+                        out.push(Event::Delta(t.to_string()));
+                    }
+                }
+                Some("usage") | Some("end") => {
+                    let u = if v["usage"].is_object() {
+                        &v["usage"]
+                    } else {
+                        &v
+                    };
+                    let input = u["input_tokens"].as_u64().or(u["inputTokens"].as_u64());
+                    let output = u["output_tokens"].as_u64().or(u["outputTokens"].as_u64());
+                    if input.is_some() || output.is_some() {
+                        out.push(Event::Usage {
+                            input: input.unwrap_or(0),
+                            output: output.unwrap_or(0),
+                        });
+                    }
+                    if v["type"] == "end" {
+                        out.push(Event::Done);
+                    }
+                }
+                Some("error") => out.push(Event::Error(nested_message(if v["error"].is_null() {
+                    &v
+                } else {
+                    &v["error"]
+                }))),
                 _ => {}
             },
             Cli::Claude => match v["type"].as_str() {
@@ -620,6 +728,9 @@ async fn run_in(
     emit: &mut (impl FnMut(Event) + Send),
 ) -> Result<(), String> {
     let (args, stdin) = invocation(cli, model, effort, prompt);
+    if cli == Cli::Grok {
+        std::fs::write(cwd.join("prompt.txt"), prompt).map_err(|e| e.to_string())?;
+    }
     let mut cmd = command(cli, &args)?;
     cmd.current_dir(cwd);
     let mut child = cmd
@@ -1002,7 +1113,7 @@ process.stdin.on('end', () => {
         let (a, _) = invocation(Cli::Codex, "gpt-6.1-sol", Some("xhigh"), "q");
         assert!(a
             .windows(2)
-            .any(|w| w == ["-c", "model_reasoning_effort=\"xhigh\""]));
+            .any(|w| w == ["-c", "model_reasoning_effort=xhigh"]));
         let (a, _) = invocation(Cli::Codex, "gpt-6.1-sol", Some("evil\" --flag"), "q");
         assert!(
             !a.iter().any(|x| x.contains("evil")),
@@ -1013,6 +1124,78 @@ process.stdin.on('end', () => {
             "You've hit your usage limit. Upgrade to Pro or try again at 3:13 PM."
         ));
         assert!(!looks_rate_limited("Not logged in · Please run /login"));
+    }
+
+    /// npm-installed apps run through .cmd shims, which refuse arguments with
+    /// quotes, percent signs or line breaks. Prompts go through stdin and no
+    /// generated argument may contain those characters.
+    #[test]
+    fn shim_launched_apps_get_shim_safe_arguments() {
+        for cli in [Cli::Codex, Cli::Claude, Cli::Grok] {
+            for effort in [None, Some("low"), Some("ultra")] {
+                let (args, _) = invocation(
+                    cli,
+                    "gpt-6.1-sol",
+                    effort,
+                    "a \"quoted\" 100% prompt\nwith lines",
+                );
+                for a in &args {
+                    assert!(
+                        !a.chars().any(|c| matches!(c, '"' | '%' | '\r' | '\n')),
+                        "{cli:?}: {a}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grok_build_stream_and_invocation() {
+        let ev = feed(
+            Cli::Grok,
+            &[
+                r#"{"type":"thought","data":"thinking"}"#,
+                r#"{"type":"text","data":"po"}"#,
+                r#"{"type":"text","data":"ng"}"#,
+                r#"{"type":"usage","usage":{"input_tokens":12,"output_tokens":2}}"#,
+                r#"{"type":"end","stopReason":"end_turn"}"#,
+            ],
+        );
+        assert_eq!(
+            ev,
+            vec![
+                Event::Delta("po".into()),
+                Event::Delta("ng".into()),
+                Event::Usage {
+                    input: 12,
+                    output: 2
+                },
+                Event::Done,
+            ]
+        );
+        let ev = feed(
+            Cli::Grok,
+            &[r#"{"type":"error","message":"Not logged in. Run grok login"}"#],
+        );
+        assert!(matches!(&ev[0], Event::Error(m) if looks_signed_out(m)));
+        let (a, stdin) = invocation(
+            Cli::Grok,
+            "grok-4.7",
+            Some("xhigh"),
+            "a \"quoted\" prompt
+line",
+        );
+        assert!(
+            stdin.is_none() && !a.iter().any(|x| x.contains("quoted")),
+            "prompt goes to a file"
+        );
+        assert!(
+            a.windows(2).any(|w| w == ["--model", "grok-4.7"])
+                && a.windows(2).any(|w| w == ["--effort", "xhigh"])
+        );
+        assert_eq!(Cli::from_provider_id("cli-grok"), Some(Cli::Grok));
+        assert_eq!(Cli::Claude.login_args(), ["auth", "login"]);
+        assert_eq!(Cli::Grok.login_args(), ["login"]);
     }
 
     #[test]

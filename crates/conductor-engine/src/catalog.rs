@@ -36,6 +36,15 @@ pub struct Catalog {
 }
 
 pub fn builtin() -> Catalog {
+    let grok = |model: &str, efforts: &[&str]| CatalogRule {
+        provider: ProviderKind::OpenaiCompatible,
+        prefix: model.into(),
+        exact: true,
+        exclude: vec![],
+        efforts: efforts.iter().map(|s| s.to_string()).collect(),
+        vision: None,
+        tools: Some(true),
+    };
     let exact = |model: &str, efforts: &[&str]| CatalogRule {
         provider: ProviderKind::Openai,
         prefix: model.into(),
@@ -50,6 +59,21 @@ pub fn builtin() -> Catalog {
         rules: vec![
             // Exact aliases and documented snapshots only. Unknown future IDs
             // retain only capabilities returned by the provider.
+            // GPT-6 family (developers.openai.com/api/docs/models).
+            exact("gpt-6.1-sol", &["low", "medium", "high", "xhigh", "max"]),
+            exact("gpt-6-astra", &["low", "medium", "high", "xhigh", "max"]),
+            exact(
+                "gpt-6-luna",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            // xAI Grok over its OpenAI-compatible API (docs.x.ai reasoning).
+            grok("grok-4.7", &["low", "medium", "high", "xhigh"]),
+            grok("grok-4.6", &["low", "medium", "high", "xhigh"]),
+            grok("grok-4.5", &["low", "medium", "high"]),
+            grok(
+                "grok-4.20-multi-agent-0309",
+                &["low", "medium", "high", "xhigh"],
+            ),
             exact("gpt-5", &["minimal", "low", "medium", "high"]),
             exact("gpt-5-2025-08-07", &["minimal", "low", "medium", "high"]),
             exact("gpt-5-mini", &[]),
@@ -124,6 +148,28 @@ fn apply(catalog: &Catalog, kind: &ProviderKind, m: &mut Model) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn current_openai_and_grok_models_get_documented_efforts() {
+        let mut o = cfg(ProviderKind::Openai, &["gpt-6.1-sol", "gpt-6-luna"]);
+        enrich(&builtin(), &mut o);
+        assert_eq!(
+            o.models[0].efforts,
+            ["low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(o.models[1].efforts[0], "none");
+        let mut x = cfg(
+            ProviderKind::OpenaiCompatible,
+            &["grok-4.7", "grok-4.5", "grok-9"],
+        );
+        enrich(&builtin(), &mut x);
+        assert_eq!(x.models[0].efforts, ["low", "medium", "high", "xhigh"]);
+        assert_eq!(x.models[1].efforts, ["low", "medium", "high"]);
+        assert!(
+            x.models[2].efforts.is_empty(),
+            "unknown future ids stay unknown"
+        );
+    }
 
     fn cfg(kind: ProviderKind, ids: &[&str]) -> ProviderConfig {
         ProviderConfig {

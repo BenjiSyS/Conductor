@@ -352,6 +352,7 @@ fn main() {
             extras::models_refresh,
             extras::cli_bridge_update,
             bridge::cli_bridge_connect,
+            bridge::cli_bridge_login,
             usage::subscription_sign_in,
             usage::subscription_usage,
             usage::subscription_sign_out,

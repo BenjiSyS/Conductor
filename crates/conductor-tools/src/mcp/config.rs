@@ -180,6 +180,45 @@ impl McpConfig {
         serde_json::json!({ "mcpServers": servers })
     }
 
+    /// Grok Build `~/.grok/config.toml` (or `.grok/config.toml`)
+    /// `[mcp_servers.<name>]` tables. Secrets become `${NAME}` placeholders.
+    pub fn to_grok_toml(&self) -> String {
+        let mut root = toml::map::Map::new();
+        let mut servers = toml::map::Map::new();
+        for s in self.exposed("xai") {
+            let mut t = toml::map::Map::new();
+            let table = |m: &BTreeMap<String, EnvValue>| {
+                toml::Value::Table(
+                    m.iter()
+                        .map(|(k, v)| (k.clone(), toml::Value::String(env_str(v))))
+                        .collect(),
+                )
+            };
+            match &s.transport {
+                Transport::Stdio { command, args, env } => {
+                    t.insert("command".into(), toml::Value::String(command.clone()));
+                    t.insert(
+                        "args".into(),
+                        toml::Value::Array(args.iter().cloned().map(toml::Value::String).collect()),
+                    );
+                    if !env.is_empty() {
+                        t.insert("env".into(), table(env));
+                    }
+                }
+                Transport::Http { url, headers } => {
+                    t.insert("url".into(), toml::Value::String(url.clone()));
+                    if !headers.is_empty() {
+                        t.insert("headers".into(), table(headers));
+                    }
+                }
+            }
+            t.insert("enabled".into(), toml::Value::Boolean(true));
+            servers.insert(s.name.clone(), toml::Value::Table(t));
+        }
+        root.insert("mcp_servers".into(), toml::Value::Table(servers));
+        toml::to_string_pretty(&toml::Value::Table(root)).unwrap_or_default()
+    }
+
     /// Codex CLI `config.toml` `[mcp_servers.<name>]` tables.
     pub fn to_codex_toml(&self) -> String {
         let mut root = toml::map::Map::new();
@@ -343,6 +382,8 @@ mod tests {
         c.upsert(gh()).unwrap();
         let claude = c.to_claude_json().to_string();
         let gemini = c.to_gemini_json().to_string();
+        let grok = c.to_grok_toml();
+        assert!(grok.contains("[mcp_servers."), "{grok}");
         let codex = c.to_codex_toml();
         for out in [&claude, &gemini, &codex] {
             assert!(out.contains("github"));

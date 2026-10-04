@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, Plug } from '@lucide/svelte';
+  import { Check, LogIn, Plug } from '@lucide/svelte';
   import { app, refresh, toast } from '../lib/app.svelte';
   import { call, readable } from '../lib/api';
   import type { BridgeInfo, Provider, SetupScan } from '../lib/types';
@@ -65,6 +65,16 @@
     }
   }
   const installed = $derived(bridges?.filter((b) => b.installed) ?? []);
+  let opened = $state<Record<string, boolean>>({});
+  // Opens the app's own sign-in (the provider's page) in a terminal window.
+  async function signIn(b: BridgeInfo) {
+    try {
+      await call('cli_bridge_login', { cli: b.cli });
+      opened[b.cli] = true;
+    } catch (e) {
+      error[b.cli] = readable(e);
+    }
+  }
 </script>
 
 {#if installed.length || local.length}
@@ -96,10 +106,19 @@
           <div>{b.label}</div>
           {#if error[b.cli]}
             <p class="xsmall warn">{error[b.cli]}</p>
+          {:else if opened[b.cli]}
+            <p class="xsmall muted">Finish signing in in the window that opened, then press Connect.</p>
+          {:else if b.signed_in === false}
+            <p class="xsmall warn">Not signed in yet.</p>
           {:else if b.version}
             <p class="xsmall muted">{b.version}</p>
           {/if}
         </div>
+        {#if b.signed_in === false || opened[b.cli]}
+          <button class="btn sm ghost" onclick={() => signIn(b)} aria-label="Sign in to {b.label}"
+            ><LogIn size={13} /> Sign in</button
+          >
+        {/if}
         {#if b.connected}
           <span class="xsmall ok"><Check size={13} /> Connected</span>
         {:else}
@@ -151,6 +170,9 @@
   }
   .brand-chatgpt .dot {
     background: #10a37f;
+  }
+  .brand-grok .dot {
+    background: var(--text);
   }
   .brand-gemini .dot {
     background: linear-gradient(135deg, #4285f4, #9b72cb, #d96570);

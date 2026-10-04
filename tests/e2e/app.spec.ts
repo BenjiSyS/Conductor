@@ -312,8 +312,11 @@ test.describe('daily use', () => {
     await s.getByRole('button', { name: 'Add provider' }).click();
     const apps = s.getByRole('region', { name: 'Apps you already have' });
     await expect(apps.getByText('Gemini (Antigravity CLI)')).toBeVisible();
-    // Not installed apps are not offered.
-    await expect(apps.getByText('Claude (Claude Code)')).toHaveCount(0);
+    // A signed-out app offers its own sign-in (the provider's page opens).
+    await expect(apps.getByText('Not signed in yet.')).toBeVisible();
+    await apps.getByRole('button', { name: 'Sign in to Claude (Claude Code)' }).click();
+    await expect(apps.getByText('Finish signing in in the window that opened, then press Connect.')).toBeVisible();
+    await expect(apps.getByText('Grok (Grok Build)')).toBeVisible();
     await apps.getByRole('button', { name: 'Connect Gemini (Antigravity CLI)' }).click();
     await expect(page.getByText('Gemini (Antigravity CLI) connected · 3 models')).toBeVisible();
     await page.screenshot({ path: `${shots}/23-bridge-connect.png` });
@@ -413,6 +416,38 @@ test.describe('daily use', () => {
     await page.screenshot({ path: `${shots}/14-combo-editor.png` });
     await editor.getByRole('button', { name: 'Save Combo' }).click();
     await expect(s.getByText('Review heavy')).toBeVisible();
+  });
+
+  test('Grok works in Combos (models, effort) and connectors (Grok Build export)', async ({ page }) => {
+    await openSettings(page);
+    const s = page.getByRole('dialog', { name: 'Settings' });
+    await s.getByRole('navigation').getByRole('button', { name: 'Providers', exact: true }).click();
+    await s.getByRole('button', { name: 'Add provider' }).click();
+    await s.getByRole('radio', { name: 'xAI (Grok)' }).click();
+    await s.getByLabel('API key').fill('xai-test-key');
+    await s.getByRole('button', { name: 'Test & connect' }).click();
+    await expect(page.getByText('xAI (Grok) connected · 2 models')).toBeVisible();
+
+    // Combo editor: a Grok model can be a member, with its own effort levels.
+    await s.getByRole('navigation').getByRole('button', { name: 'Combos', exact: true }).click();
+    await s.getByRole('button', { name: 'New Combo' }).click();
+    const editor = page.getByRole('dialog', { name: 'Edit Combo' });
+    await editor.getByLabel('Name').fill('With Grok');
+    const model = editor.getByLabel('Model').first();
+    await model.selectOption('xai/grok-4.7');
+    const effort = editor.getByRole('slider', { name: 'Effort for xai/grok-4.7' });
+    await expect(effort).toHaveAttribute('max', '4');
+    await effort.focus();
+    await page.keyboard.press('End');
+    await expect(effort).toHaveAttribute('aria-valuetext', 'Extra high');
+    await editor.getByRole('button', { name: 'Save Combo' }).click();
+    await expect(s.getByText('With Grok')).toBeVisible();
+    await expect(s.getByText('xai/grok-4.7').first()).toBeVisible();
+
+    // Connectors: MCP servers export for Grok Build.
+    await s.getByRole('navigation').getByRole('button', { name: 'MCP, skills & plugins', exact: true }).click();
+    await s.getByLabel('Export MCP config').selectOption('grok');
+    await expect(page.getByLabel('Exported configuration')).toHaveValue(/mcp_servers/);
   });
 
   test('MCP: a remote connector connects by URL with one click', async ({ page }) => {

@@ -49,7 +49,7 @@ pub struct Prefs {
     /// Warn when a plan window has under 10% left.
     pub notify_low_usage: bool,
     /// Keep connected signed-in apps (Codex CLI, Antigravity CLI, Claude
-    /// Code) updated so their newest models can be used.
+    /// Code, Grok Build) updated so their newest models can be used.
     pub auto_update_apps: bool,
     pub seen_resume: BTreeMap<String, u64>,
 }

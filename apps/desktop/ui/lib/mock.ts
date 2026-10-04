@@ -425,11 +425,18 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
               ]
             : c.base_url.includes('api.x.ai')
               ? [
-                  { id: 'grok-4', name: 'Grok 4', efforts: [], context_window: 256000, tools: true, vision: true },
                   {
-                    id: 'grok-4-fast',
-                    name: 'Grok 4 Fast',
-                    efforts: [],
+                    id: 'grok-4.7',
+                    name: 'Grok 4.7',
+                    efforts: ['low', 'medium', 'high', 'xhigh'],
+                    context_window: 2000000,
+                    tools: true,
+                    vision: true,
+                  },
+                  {
+                    id: 'grok-4.6',
+                    name: 'Grok 4.6',
+                    efforts: ['low', 'medium', 'high', 'xhigh'],
                     context_window: 2000000,
                     tools: true,
                     vision: true,
@@ -465,10 +472,19 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
         kind: p.kind,
         enabled: p.enabled,
         bridge:
-          ({ 'cli-agy': 'gemini', 'cli-codex': 'chatgpt', 'cli-claude': 'claude' } as Record<string, string>)[p.id] ??
-          null,
+          (
+            { 'cli-agy': 'gemini', 'cli-codex': 'chatgpt', 'cli-claude': 'claude', 'cli-grok': 'grok' } as Record<
+              string,
+              string
+            >
+          )[p.id] ?? null,
         brand:
-          ({ 'cli-agy': 'gemini', 'cli-codex': 'chatgpt', 'cli-claude': 'claude' } as Record<string, string>)[p.id] ??
+          (
+            { 'cli-agy': 'gemini', 'cli-codex': 'chatgpt', 'cli-claude': 'claude', 'cli-grok': 'grok' } as Record<
+              string,
+              string
+            >
+          )[p.id] ??
           (p.base_url.includes('api.x.ai')
             ? 'grok'
             : (({ anthropic: 'claude', openai: 'chatgpt', gemini: 'gemini' } as Record<string, string>)[p.kind] ??
@@ -509,7 +525,8 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
       [
         ['agy', 'Gemini (Antigravity CLI)', 'gemini', '1.2.16'],
         ['codex', 'ChatGPT (Codex CLI)', 'chatgpt', 'codex-cli 0.153.4'],
-        ['claude', 'Claude (Claude Code)', 'claude', null],
+        ['claude', 'Claude (Claude Code)', 'claude', '2.1.288 (Claude Code)'],
+        ['grok', 'Grok (Grok Build)', 'grok', '0.9.2'],
       ] as const
     ).map(([cli, label, brand, version]) => ({
       cli,
@@ -518,15 +535,20 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
       installed: version !== null,
       version,
       connected: db.providers.some((p) => p.id === `cli-${cli}` && p.enabled),
+      signed_in: cli === 'claude' ? false : cli === 'codex' ? true : null,
       sign_in_hint: 'Open a terminal and sign in.',
     })),
   }),
+  cli_bridge_login: () => {},
   cli_bridge_connect: async (a) => {
     await new Promise((r) => setTimeout(r, 200));
     const cli = a.cli as string;
-    const label = { agy: 'Gemini (Antigravity CLI)', codex: 'ChatGPT (Codex CLI)', claude: 'Claude (Claude Code)' }[
-      cli
-    ]!;
+    const label = {
+      agy: 'Gemini (Antigravity CLI)',
+      codex: 'ChatGPT (Codex CLI)',
+      claude: 'Claude (Claude Code)',
+      grok: 'Grok (Grok Build)',
+    }[cli]!;
     const ids = cli === 'agy' ? ['default', 'gemini-3.8-flash-medium', 'gemini-3.1-pro-high'] : ['default'];
     const p: Provider = {
       id: `cli-${cli}`,
@@ -983,7 +1005,7 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
       tools: [],
       fix: { kind: m.enabled ? 'none' : 'enable' },
     })),
-  mcp_export: () => '{ "mcpServers": {} }',
+  mcp_export: (a) => (a.target === 'grok' || a.target === 'codex' ? '[mcp_servers]\n' : '{ "mcpServers": {} }'),
   secret_set: () => undefined,
   secret_delete: () => undefined,
   skills_list: () => [],
