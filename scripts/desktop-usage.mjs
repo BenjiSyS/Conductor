@@ -158,6 +158,17 @@ try {
       throw new Error(JSON.stringify(prov.limits));
   });
 
+  await step('model lists stay current: new models appear, retired ones disappear', async () => {
+    const setModels = (ids) => fetch(`http://127.0.0.1:${mockPort}/__models`, { method: 'POST', body: JSON.stringify({ ids }) });
+    await setModels(['mock-coder', 'mock-brand-new']);
+    const changed = await invoke('models_refresh');
+    const p = (await invoke('snapshot')).providers.find((x) => x.id === 'usage-mock');
+    const ids = p.models.map((m) => m.id);
+    if (changed !== 1 || !ids.includes('mock-brand-new') || ids.includes('mock-reviewer')) throw new Error(`${changed} ${ids}`);
+    if ((await invoke('models_refresh')) !== 0) throw new Error('unchanged list reported as changed');
+    await setModels(['mock-coder', 'mock-reviewer']);
+  });
+
   await step('subscription sign-in is refused until the user opts in', async () => {
     const r = await invoke('subscription_sign_in', { service: 'claude' }).then(
       () => 'allowed',

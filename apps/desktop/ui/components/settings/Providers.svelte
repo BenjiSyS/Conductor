@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Plus, Unplug, Trash2, RefreshCw } from '@lucide/svelte';
-  import { app, attempt, refresh } from '../../lib/app.svelte';
+  import { app, attempt, refresh, toast } from '../../lib/app.svelte';
   import { call } from '../../lib/api';
   import type { Provider } from '../../lib/types';
   import ProviderForm from '../ProviderForm.svelte';
@@ -15,6 +15,20 @@
     gemini: 'Google Gemini',
     openai_compatible: 'OpenAI-compatible',
   };
+
+  let checking = $state(false);
+  // Model lists also refresh on their own at start-up and every 6 hours.
+  async function checkModels() {
+    checking = true;
+    const n = await attempt(() => call<number>('models_refresh'));
+    checking = false;
+    if (n === undefined) return;
+    await refresh();
+    toast(
+      n ? `Updated the model list for ${n} provider${n === 1 ? '' : 's'}` : 'Model lists are up to date',
+      'success',
+    );
+  }
 
   async function disconnect(p: Provider) {
     await attempt(
@@ -42,7 +56,14 @@
   }
 </script>
 
-<h2>Providers</h2>
+<div class="row head">
+  <h2 class="grow">Providers</h2>
+  {#if app.providers.length}
+    <button class="btn sm" onclick={checkModels} disabled={checking}
+      ><RefreshCw size={13} /> {checking ? 'Checking…' : 'Check for new models'}</button
+    >
+  {/if}
+</div>
 <p class="lede">
   Connect the AI providers you already use. Keys live in your OS credential store; Conductor has no account of its own.
 </p>
@@ -120,6 +141,9 @@
 </p>
 
 <style>
+  .head h2 {
+    margin: 0;
+  }
   .prov {
     margin-bottom: var(--s2);
     padding: var(--s3) var(--s4);

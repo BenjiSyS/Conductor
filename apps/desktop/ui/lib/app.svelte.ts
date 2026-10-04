@@ -479,6 +479,8 @@ export async function init() {
   await onEngine(onEngineEvent);
   await listen<{ model: string; level: string; why: string }>('effort-request', (r) => (app.effortRequest = r));
   // OS notifications come from the backend; the ding plays here (Settings › General).
+  // Model lists refresh in the background; new models show up right away.
+  await listen<number>('providers-changed', () => void refresh());
   await listen<{ title: string; body: string }>('notify', () => {
     if (app.prefs?.notify_sound !== false) ding();
   });

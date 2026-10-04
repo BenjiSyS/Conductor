@@ -1,3 +1,5 @@
+// Browser-preview backend. All providers, models and numbers here are
+// sample data; the desktop app lists models live from each provider.
 // In-memory backend used only when the UI runs in a plain browser (UI
 // development and automated UI tests). It never touches the network or disk.
 
@@ -374,16 +376,16 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
       c.kind === 'openai'
         ? [
             {
-              id: 'gpt-5',
-              name: 'GPT-5',
+              id: 'gpt-6.1-sol',
+              name: 'GPT-6.1 Sol',
               efforts: ['minimal', 'low', 'medium', 'high'],
               context_window: 400000,
               tools: true,
               vision: true,
             },
             {
-              id: 'gpt-5-mini',
-              name: 'GPT-5 mini',
+              id: 'gpt-6-luna',
+              name: 'GPT-6 Luna',
               efforts: ['minimal', 'low', 'medium', 'high'],
               context_window: 400000,
               tools: true,
@@ -393,8 +395,8 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
         : c.kind === 'anthropic'
           ? [
               {
-                id: 'claude-sonnet',
-                name: 'Claude Sonnet',
+                id: 'claude-sonnet-5-5',
+                name: 'Claude Sonnet 5.5',
                 efforts: [],
                 context_window: 200000,
                 tools: true,
@@ -404,16 +406,16 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
           : c.kind === 'gemini'
             ? [
                 {
-                  id: 'gemini-pro',
-                  name: 'Gemini Pro',
+                  id: 'gemini-3.1-pro',
+                  name: 'Gemini 3.1 Pro',
                   efforts: [],
                   context_window: 1000000,
                   tools: true,
                   vision: true,
                 },
                 {
-                  id: 'gemini-flash',
-                  name: 'Gemini Flash',
+                  id: 'gemini-3.8-flash',
+                  name: 'Gemini 3.8 Flash',
                   efforts: [],
                   context_window: 1000000,
                   tools: true,
@@ -585,6 +587,7 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
     return { id, chars: [...text].length, lines, path: `(preview)/pastes/${id}.txt` };
   },
   profile_info: () => ({ user: 'Alex' }),
+  models_refresh: () => 0,
   setup_prepare: () => {},
   setup_scan: async () => {
     await new Promise((r) => setTimeout(r, 150));

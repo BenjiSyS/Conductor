@@ -58,14 +58,22 @@ function reply(body) {
   return 'Hello from the mock provider.';
 }
 
+// The model list can be changed by tests (POST /__models) to simulate a
+// provider releasing or retiring models.
+let modelIds = ['mock-coder', 'mock-reviewer'];
 const server = http.createServer((req, res) => {
   let data = '';
   req.on('data', (c) => (data += c));
   req.on('end', async () => {
     const auth = req.headers.authorization ?? '';
+    if (req.url === '/__models' && req.method === 'POST') {
+      modelIds = JSON.parse(data).ids;
+      res.writeHead(204).end();
+      return;
+    }
     if (req.url?.endsWith('/models')) {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ data: [{ id: 'mock-coder' }, { id: 'mock-reviewer' }] }));
+      res.end(JSON.stringify({ data: modelIds.map((id) => ({ id })) }));
       return;
     }
     if (req.url?.endsWith('/chat/completions') && req.method === 'POST') {

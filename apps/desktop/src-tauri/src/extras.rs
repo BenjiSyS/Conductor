@@ -140,6 +140,16 @@ pub fn start(app: &AppHandle) {
         }
     });
 
+    // Model lists: shortly after start, then every 6 hours.
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        loop {
+            refresh_catalogs(&handle).await;
+            tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+        }
+    });
+
     // Connector sign-ins: renew tokens before they expire.
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -441,4 +451,53 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+// ---------- keep model lists current ----------
+
+/// Re-list every connected provider's models: new models appear right away,
+/// retired ones disappear (they can no longer be chosen). Providers that fail
+/// (offline, signed out) keep their last list. Returns how many changed.
+pub async fn refresh_catalogs(app: &AppHandle) -> usize {
+    use conductor_core::domain::ProviderConfig;
+    let Some(state) = app.try_state::<AppState>() else {
+        return 0;
+    };
+    let providers: Vec<ProviderConfig> = state.store.list("provider").unwrap_or_default();
+    let mut changed = 0;
+    for mut p in providers.into_iter().filter(|p| p.enabled) {
+        let Ok(key) = crate::chat::key(&p) else {
+            continue;
+        };
+        let listed = tokio::time::timeout(
+            Duration::from_secs(60),
+            conductor_core::providers::list_models(
+                &p,
+                &key,
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        )
+        .await;
+        let Ok(Ok(models)) = listed else { continue };
+        if models.is_empty() {
+            continue;
+        }
+        let before: Vec<String> = p.models.iter().map(|m| m.id.clone()).collect();
+        p.models = models;
+        conductor_engine::catalog::enrich(&conductor_engine::catalog::builtin(), &mut p);
+        let after: Vec<String> = p.models.iter().map(|m| m.id.clone()).collect();
+        if before != after && state.store.put("provider", &p.id.clone(), &p).is_ok() {
+            changed += 1;
+        }
+    }
+    if changed > 0 {
+        let _ = app.emit("providers-changed", changed);
+    }
+    changed
+}
+
+/// Refresh model lists now (Settings › Providers "Check for new models").
+#[tauri::command]
+pub async fn models_refresh(app: AppHandle) -> CmdResult<usize> {
+    Ok(refresh_catalogs(&app).await)
 }

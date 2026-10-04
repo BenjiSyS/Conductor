@@ -123,13 +123,13 @@ test.describe('daily use', () => {
   });
 
   test('model picker lists combos and models; effort only shows declared levels', async ({ page }) => {
-    await page.getByRole('button', { name: /GPT-5/ }).first().click();
+    await page.getByRole('button', { name: /GPT-6/ }).first().click();
     const list = page.getByRole('listbox', { name: 'Choose a model or Combo' });
     await expect(list.getByText('Combos', { exact: true })).toBeVisible();
     await expect(list.getByText('Balanced')).toBeVisible();
     await page.screenshot({ path: `${shots}/07-model-picker.png` });
-    await list.getByLabel('Search models').fill('mini');
-    await list.getByRole('option', { name: /GPT-5 mini/ }).click();
+    await list.getByLabel('Search models').fill('luna');
+    await list.getByRole('option', { name: /GPT-6 Luna/ }).click();
     // Effort slider: Auto plus only the levels the model declares.
     const effort = page.getByRole('slider', { name: 'Effort', exact: true });
     await expect(effort).toHaveAttribute('max', '4');
@@ -142,7 +142,7 @@ test.describe('daily use', () => {
     await expect(effort).toHaveAttribute('aria-valuetext', 'High');
     // A Combo offers every level its members support (members skip the rest).
     await page
-      .getByRole('button', { name: /GPT-5 mini/ })
+      .getByRole('button', { name: /GPT-6 Luna/ })
       .first()
       .click();
     await page.getByRole('option', { name: /Balanced/ }).click();
