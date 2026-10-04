@@ -350,6 +350,7 @@ fn main() {
             extras::mcp_connect_remote,
             extras::mcp_sign_in,
             extras::models_refresh,
+            extras::cli_bridge_update,
             bridge::cli_bridge_connect,
             usage::subscription_sign_in,
             usage::subscription_usage,

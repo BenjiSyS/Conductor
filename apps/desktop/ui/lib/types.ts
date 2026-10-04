@@ -45,6 +45,7 @@ export interface Prefs {
   notify_done: boolean;
   notify_sound: boolean;
   notify_low_usage: boolean;
+  auto_update_apps: boolean;
   seen_resume: Record<string, number>;
 }
 
