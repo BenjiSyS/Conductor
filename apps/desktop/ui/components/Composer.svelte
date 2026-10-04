@@ -10,6 +10,8 @@
     stopCurrent,
     succeeded,
     toast,
+    draftMode,
+    slashCommand,
   } from '../lib/app.svelte';
   import { call, readable } from '../lib/api';
   import type { Answer, GoalRecord, Mode, QuestionRound } from '../lib/types';
@@ -28,17 +30,29 @@
   let checksPrefilled = $state<string | null>(null);
 
   const running = $derived(!!(app.conversationId && app.running[app.conversationId]));
+  // Chat and Agent are modes; Goal and Plan are started per message.
   const modes: { id: Mode; label: string; hint: string }[] = [
     { id: 'chat', label: 'Chat', hint: 'Ask and discuss' },
-    { id: 'plan', label: 'Plan', hint: 'Design before editing — never changes files' },
-    { id: 'goal', label: 'Goal', hint: 'Outcome-driven: plan, delegate, verify, finish' },
     { id: 'agent', label: 'Agent', hint: 'Edit files and run commands under your permission policy' },
   ];
+  const commands = [
+    { cmd: 'goal', hint: 'Outcome-driven: plan, delegate, verify, finish' },
+    { cmd: 'plan', hint: 'Design before editing — never changes files' },
+  ] as const;
+  const mode = $derived(draftMode());
+  // Typing "/" shows the commands until a space is typed.
+  const menu = $derived(
+    /^\/[a-z]*$/i.test(app.draft) ? commands.filter((c) => c.cmd.startsWith(app.draft.slice(1).toLowerCase())) : [],
+  );
+  function complete(cmd: string) {
+    app.draft = `/${cmd} `;
+    queueMicrotask(() => textarea?.focus());
+  }
 
   // Prefill Definition of Done from detected test commands.
   $effect(() => {
     const pid = app.projectId;
-    if (app.mode === 'goal' && pid && checksPrefilled !== pid) {
+    if (mode === 'goal' && pid && checksPrefilled !== pid) {
       checksPrefilled = pid;
       call<{ detection: { suggested_test_commands: string[] }; config: { verify?: { commands?: string[] } } | null }>(
         'project_info',
@@ -102,6 +116,11 @@
   }
 
   function key(e: KeyboardEvent) {
+    if (menu.length && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
+      e.preventDefault();
+      complete(menu[0].cmd);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       void submit();
@@ -123,8 +142,31 @@
       });
       return;
     }
-    if (app.mode === 'goal') return startGoalFlow();
-    await send();
+    const cmd = slashCommand(app.draft);
+    const body = cmd ? app.draft.replace(/^\/(goal|plan)\s*/i, '') : app.draft;
+    if (cmd && !body.trim()) {
+      toast(cmd === 'goal' ? 'Describe the outcome after /goal' : 'Describe what to plan after /plan');
+      return;
+    }
+    if (cmd === 'goal') {
+      app.forcedMode = 'goal';
+      app.draft = body;
+      return startGoalFlow();
+    }
+    const base = app.mode === 'agent' ? 'agent' : 'chat';
+    app.mode = cmd === 'plan' ? 'plan' : base;
+    if (cmd) app.draft = body;
+    try {
+      await send();
+    } finally {
+      app.mode = base;
+    }
+  }
+
+  /** Leave Goal setup; keep the text as a /goal prompt so nothing is lost. */
+  function endGoalSetup(keepDraft: boolean) {
+    app.forcedMode = null;
+    if (keepDraft && app.draft.trim()) app.draft = `/goal ${app.draft}`;
   }
 
   async function startGoalFlow() {
@@ -173,6 +215,7 @@
     );
     if (!rec) {
       goalStage = 'idle';
+      endGoalSetup(true);
       return;
     }
     const ok = await succeeded(() => call('goal_start', { id: rec.goal.id }));
@@ -181,7 +224,10 @@
     round = null;
     if (ok) {
       app.draft = '';
+      endGoalSetup(false);
       openGoal(rec.goal.id);
+    } else {
+      endGoalSetup(true);
     }
   }
 
@@ -220,11 +266,24 @@
       oncancel={() => {
         goalStage = 'idle';
         round = null;
+        endGoalSetup(true);
       }}
     />
   {/if}
 
-  <div class="composer" class:goal={app.mode === 'goal'}>
+  <div class="composer" class:goal={mode === 'goal'}>
+    {#if menu.length}
+      <div class="slash" role="listbox" aria-label="Commands">
+        {#each menu as c, i (c.cmd)}
+          <button role="option" aria-selected={i === 0} onclick={() => complete(c.cmd)}
+            ><span class="mono">/{c.cmd}</span><span class="xsmall muted">{c.hint}</span></button
+          >
+        {/each}
+      </div>
+    {/if}
+    {#if mode === 'goal' || mode === 'plan'}
+      <span class="badge mode-badge">{mode === 'goal' ? 'Goal' : 'Plan'}</span>
+    {/if}
     <textarea
       bind:this={textarea}
       bind:value={app.draft}
@@ -232,18 +291,18 @@
       oninput={autosize}
       onpaste={paste}
       rows="1"
-      placeholder={app.mode === 'goal'
+      placeholder={mode === 'goal'
         ? 'Describe the outcome you want…'
-        : app.mode === 'plan'
+        : mode === 'plan'
           ? 'What should we plan?'
-          : app.mode === 'agent'
-            ? 'What should the agent do?'
-            : `Ask about ${app.project?.name ?? 'your project'}…`}
+          : mode === 'agent'
+            ? 'What should the agent do? (/goal or /plan for more)'
+            : `Ask about ${app.project?.name ?? 'your project'}… (/goal, /plan)`}
       aria-label="Prompt"
       disabled={goalStage === 'asking' || goalStage === 'starting'}
     ></textarea>
 
-    {#if app.mode === 'goal' && showGoalOptions}
+    {#if mode === 'goal' && showGoalOptions}
       <div class="goal-options">
         <label class="label xsmall" for="dod">Definition of Done — commands that must pass (one per line)</label>
         <textarea id="dod" class="textarea mono" rows="2" bind:value={checks} placeholder="cargo test"></textarea>
@@ -261,7 +320,7 @@
       </div>
       <ModelPicker />
       <EffortControl />
-      {#if app.mode === 'goal'}
+      {#if mode === 'goal'}
         <button
           class="btn ghost sm"
           aria-expanded={showGoalOptions}
@@ -274,7 +333,7 @@
         <button class="btn icon stop" aria-label="Stop" title="Stop (Esc)" onclick={stopCurrent}
           ><Square size={14} fill="currentColor" /></button
         >
-      {:else if app.mode === 'goal'}
+      {:else if mode === 'goal'}
         <button class="btn primary" onclick={submit} disabled={!app.draft.trim() || goalStage !== 'idle'}>
           {#if goalStage === 'asking'}<span class="spinner"></span> Thinking…{:else if goalStage === 'starting'}<span
               class="spinner"
@@ -294,6 +353,49 @@
 </div>
 
 <style>
+  .composer {
+    position: relative;
+  }
+  .slash {
+    position: absolute;
+    left: var(--s2);
+    bottom: calc(100% + 6px);
+    z-index: 20;
+    display: grid;
+    min-width: 320px;
+    padding: var(--s1);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+  .slash button {
+    display: flex;
+    gap: var(--s3);
+    align-items: baseline;
+    border: none;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    padding: 6px var(--s2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .slash button[aria-selected='true'],
+  .slash button:hover {
+    background: var(--surface-hover);
+  }
+  .mode-badge {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    font-size: var(--fs-xs);
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 1px 8px;
+  }
   .composer-wrap {
     max-width: var(--content-w);
     margin: 0 auto;

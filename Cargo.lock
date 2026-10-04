@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "conductor-context",
  "conductor-core",
@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-context"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "conductor-security",
  "hex",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-orchestrator"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "conductor-context",
@@ -892,7 +892,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-remote"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "axum-server",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-security"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-tools"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "conductor-context",
  "conductor-security",

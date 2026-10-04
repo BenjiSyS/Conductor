@@ -1,6 +1,6 @@
 <script lang="ts">
   import { FolderOpen, FolderPlus, GitBranch, PanelLeft, Plug, Target, Brain } from '@lucide/svelte';
-  import { app, openGoal, openProjectDialog, openProjectPath } from '../lib/app.svelte';
+  import { app, openGoal, openProjectDialog, openProjectPath, draftMode } from '../lib/app.svelte';
   import { call } from '../lib/api';
   import { ago } from '../lib/format';
   import Logo from './Logo.svelte';
@@ -113,25 +113,36 @@
       {/if}
 
       <div class="intro">
-        {#if app.mode === 'goal'}
+        {#if draftMode() === 'goal'}
           <h3>Start a Goal</h3>
           <p class="muted small">
             Describe the outcome. Conductor asks only what matters, plans tasks, assigns models, verifies with your
             checks, and keeps going until it's done — even in the background.
           </p>
-        {:else if app.mode === 'agent'}
+        {:else if draftMode() === 'agent'}
           <h3>Agent</h3>
           <p class="muted small">The model can read and edit files and run commands under your permission policy.</p>
-        {:else if app.mode === 'plan'}
+        {:else if draftMode() === 'plan'}
           <h3>Plan</h3>
           <p class="muted small">Understand and design before changing anything. Plan mode never edits files.</p>
         {:else}
           <h3>Ask anything about {app.project.name}</h3>
-          <p class="muted small">Only the relevant files are sent — see the context budget under the prompt.</p>
+          <p class="muted small">
+            Only the relevant files are sent — see the context budget under the prompt. Type <span class="kbd"
+              >/goal</span
+            >
+            for an outcome Conductor plans and verifies, or <span class="kbd">/plan</span> to design first.
+          </p>
         {/if}
         <div class="chips">
-          {#each suggestions[app.mode] as s}
-            <button class="chip" onclick={() => (app.draft = s)}>{s}</button>
+          {#each suggestions[draftMode()] as s}
+            <button
+              class="chip"
+              onclick={() => {
+                const cmd = draftMode();
+                app.draft = cmd === 'goal' || cmd === 'plan' ? `/${cmd} ${s}` : s;
+              }}>{s}</button
+            >
           {/each}
         </div>
       </div>

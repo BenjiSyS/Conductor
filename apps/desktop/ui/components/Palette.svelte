@@ -53,7 +53,7 @@
         label: 'Plan something',
         group: 'Work',
         run: () => {
-          app.mode = 'plan';
+          app.draft = '/plan ';
           app.view = 'home';
           app.conversationId = null;
         },
@@ -63,7 +63,7 @@
         label: 'Start a Goal',
         group: 'Work',
         run: () => {
-          app.mode = 'goal';
+          app.draft = '/goal ';
           app.view = 'home';
           app.conversationId = null;
           app.goalId = null;
