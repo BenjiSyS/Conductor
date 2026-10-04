@@ -312,8 +312,11 @@ test.describe('daily use', () => {
     await s.getByRole('button', { name: 'Add provider' }).click();
     const apps = s.getByRole('region', { name: 'Apps you already have' });
     await expect(apps.getByText('Gemini (Antigravity CLI)')).toBeVisible();
-    // Not installed apps are not offered.
-    await expect(apps.getByText('Claude (Claude Code)')).toHaveCount(0);
+    // A signed-out app offers its own sign-in (the provider's page opens).
+    await expect(apps.getByText('Not signed in yet.')).toBeVisible();
+    await apps.getByRole('button', { name: 'Sign in to Claude (Claude Code)' }).click();
+    await expect(apps.getByText('Finish signing in in the window that opened, then press Connect.')).toBeVisible();
+    await expect(apps.getByText('Grok (Grok Build)')).toBeVisible();
     await apps.getByRole('button', { name: 'Connect Gemini (Antigravity CLI)' }).click();
     await expect(page.getByText('Gemini (Antigravity CLI) connected · 3 models')).toBeVisible();
     await page.screenshot({ path: `${shots}/23-bridge-connect.png` });

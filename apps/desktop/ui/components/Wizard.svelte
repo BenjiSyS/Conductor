@@ -108,8 +108,8 @@
         {/if}
         {#if showForm}<ProviderForm ondone={() => (showForm = false)} />{/if}
         <p class="xsmall faint note">
-          Provider sign-in pages aren't used: these providers' developer APIs authenticate with API keys. Keys go to
-          your OS credential store.
+          No key? Use an app you're already signed in to (Codex, Claude Code, Antigravity, Grok Build) — Sign in opens
+          the provider's own page. API keys go to your OS credential store.
         </p>
       {:else if step === 3}
         <h2>One model or a Combo?</h2>

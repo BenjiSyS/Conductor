@@ -423,7 +423,7 @@ export interface UsageOverview {
     name: string;
     kind: ProviderKind;
     enabled: boolean;
-    bridge: 'gemini' | 'chatgpt' | 'claude' | null;
+    bridge: 'gemini' | 'chatgpt' | 'claude' | 'grok' | null;
     brand: 'claude' | 'chatgpt' | 'gemini' | 'grok' | 'other';
     limits: {
       requests: RateWindow;
@@ -450,12 +450,14 @@ export interface SubscriptionUsage {
   windows: { label: string; used_percent: number; resets_at: string | null; resets_at_unix: number | null }[];
 }
 export interface BridgeInfo {
-  cli: 'agy' | 'codex' | 'claude';
+  cli: 'agy' | 'codex' | 'claude' | 'grok';
   label: string;
-  brand: 'gemini' | 'chatgpt' | 'claude';
+  brand: 'gemini' | 'chatgpt' | 'claude' | 'grok';
   installed: boolean;
   version: string | null;
   connected: boolean;
+  /** null when the app can't report it. */
+  signed_in: boolean | null;
   sign_in_hint: string;
 }
 export interface SetupScan {

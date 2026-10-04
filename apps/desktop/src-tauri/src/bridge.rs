@@ -54,6 +54,10 @@ pub async fn cli_bridges(state: State<'_, AppState>) -> CmdResult<Value> {
         .snapshot(String::new())
         .map_err(|e| e.to_string())?;
     let found = cli_bridge::detect().await;
+    let mut signed = std::collections::HashMap::new();
+    for d in &found {
+        signed.insert(d.cli, cli_bridge::signed_in(d.cli).await);
+    }
     let list: Vec<Value> = Cli::ALL
         .into_iter()
         .map(|cli| {
@@ -69,6 +73,7 @@ pub async fn cli_bridges(state: State<'_, AppState>) -> CmdResult<Value> {
                 "installed": d.is_some(),
                 "version": d.and_then(|d| d.version.clone()),
                 "connected": connected,
+                "signed_in": signed.get(&cli).copied().flatten(),
                 "sign_in_hint": cli.sign_in_hint(),
             })
         })
@@ -108,4 +113,74 @@ pub async fn cli_bridge_connect(
         enabled: true,
     };
     crate::chat::save_provider(state, config, Some(key)).await
+}
+
+/// Open the app's own sign-in in a terminal window. The provider's sign-in
+/// page opens from there; Conductor never sees the password or tokens.
+#[tauri::command]
+pub async fn cli_bridge_login(cli: String) -> CmdResult<()> {
+    let cli = Cli::parse(&cli).ok_or("Unknown app")?;
+    let exe = cli_bridge::executable(cli)
+        .ok_or_else(|| format!("{} is not installed.", cli.label()))?
+        .display()
+        .to_string();
+    let args = cli.login_args();
+    #[cfg(windows)]
+    {
+        let title = format!("Sign in to {}", cli.label());
+        std::process::Command::new("cmd")
+            .args(["/C", "start", title.as_str(), "cmd", "/K", exe.as_str()])
+            .args(args)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Single-quote the path for the shell, then escape for AppleScript.
+        let quoted = format!("'{}'", exe.replace('\'', r"'\''"));
+        let line = std::iter::once(quoted)
+            .chain(args.iter().map(|a| a.to_string()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let script = format!(
+            "tell application \"Terminal\" to do script \"{}\"",
+            line.replace('\\', r"\\").replace('"', "\\\"")
+        );
+        std::process::Command::new("osascript")
+            .args([
+                "-e",
+                script.as_str(),
+                "-e",
+                "tell application \"Terminal\" to activate",
+            ])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mut opened = false;
+        for term in [
+            "x-terminal-emulator",
+            "gnome-terminal",
+            "konsole",
+            "xfce4-terminal",
+            "xterm",
+        ] {
+            let mut c = std::process::Command::new(term);
+            c.arg(if term == "gnome-terminal" { "--" } else { "-e" });
+            c.arg(&exe).args(args);
+            if c.spawn().is_ok() {
+                opened = true;
+                break;
+            }
+        }
+        if !opened {
+            return Err(format!(
+                "No terminal found. Run {} {} yourself.",
+                exe,
+                args.join(" ")
+            ));
+        }
+    }
+    Ok(())
 }

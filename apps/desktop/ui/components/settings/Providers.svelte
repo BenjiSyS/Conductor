@@ -83,7 +83,8 @@
     <div class="text">
       <strong>Keep signed-in apps up to date</strong>
       <p>
-        Updates Codex CLI, Antigravity CLI and Claude Code once a day so their newest models can be used right away.
+        Updates Codex CLI, Antigravity CLI, Claude Code and Grok Build once a day so their newest models can be used
+        right away.
       </p>
     </div>
     <Toggle
