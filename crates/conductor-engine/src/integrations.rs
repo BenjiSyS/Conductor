@@ -1202,7 +1202,10 @@ mod tests {
             .await
             .unwrap();
         let result: Value = serde_json::from_str(output.trim()).unwrap();
-        assert_eq!(result["cwd"], project.path().to_string_lossy().as_ref());
+        // Compare resolved paths: macOS reports /var temp folders as
+        // /private/var (a symlink), Windows may add a verbatim prefix.
+        let cwd = std::fs::canonicalize(result["cwd"].as_str().unwrap()).unwrap();
+        assert_eq!(cwd, std::fs::canonicalize(project.path()).unwrap());
         assert_eq!(result["value"], literal);
     }
 
