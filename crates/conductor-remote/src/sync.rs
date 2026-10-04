@@ -170,8 +170,10 @@ pub fn watch(
         order: VecDeque::new(),
         cap: 256,
     }));
-    let pending: Arc<Mutex<HashMap<PathBuf, std::time::Instant>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    // Trailing-edge debounce: handle a path once it has been quiet for 50 ms.
+    // A save is often truncate-then-write; acting on the first event read the
+    // empty file and dropped the write that followed, losing the final content.
+    let (tx, rx) = std::sync::mpsc::channel::<(PathBuf, String)>();
     let root2 = root.clone();
     let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(ev) = res else { return };
@@ -189,51 +191,69 @@ pub fn watch(
             {
                 continue;
             }
-            // Debounce bursts (editors write several events per save).
-            {
-                let mut pend = pending.lock().expect("pending lock");
-                let now = std::time::Instant::now();
-                if pend
-                    .get(&p)
-                    .is_some_and(|t| now.duration_since(*t) < Duration::from_millis(50))
-                {
-                    continue;
-                }
-                pend.insert(p.clone(), now);
-            }
-            let change = match std::fs::read(&p) {
-                Ok(bytes) if p.is_file() => {
-                    let hash = content_hash(&bytes);
-                    let text = (bytes.len() < 256 * 1024 && !bytes.contains(&0))
-                        .then(|| String::from_utf8_lossy(&bytes).into_owned());
-                    let mut c = cache.lock().expect("cache lock");
-                    let diff = match (&text, c.map.get(&p)) {
-                        (Some(new), Some(old)) if old != new => Some(unified_diff(old, new, &rel)),
-                        (Some(_), Some(_)) => continue, // unchanged content
-                        _ => None,
-                    };
-                    if let Some(t) = text {
-                        c.put(p.clone(), t);
-                    }
-                    FileChange {
-                        project: project.clone(),
-                        path: rel,
-                        hash: Some(hash),
-                        diff,
-                    }
-                }
-                Ok(_) => continue,
-                Err(_) if !p.exists() => FileChange {
-                    project: project.clone(),
-                    path: rel,
-                    hash: None,
-                    diff: None,
-                },
-                Err(_) => continue,
-            };
-            emit(change);
+            let _ = tx.send((p, rel));
         }
     })?;
+    std::thread::spawn(move || {
+        use std::sync::mpsc::RecvTimeoutError;
+        let quiet = Duration::from_millis(50);
+        let mut pending: HashMap<PathBuf, (String, std::time::Instant)> = HashMap::new();
+        loop {
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok((p, rel)) => {
+                    pending.insert(p, (rel, std::time::Instant::now()));
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                // The watcher was dropped: flush what is left, then stop.
+                Err(RecvTimeoutError::Disconnected) if pending.is_empty() => break,
+                Err(RecvTimeoutError::Disconnected) => std::thread::sleep(quiet),
+            }
+            let now = std::time::Instant::now();
+            let ready: Vec<PathBuf> = pending
+                .iter()
+                .filter(|(_, (_, at))| now.duration_since(*at) >= quiet)
+                .map(|(p, _)| p.clone())
+                .collect();
+            for p in ready {
+                let Some((rel, _)) = pending.remove(&p) else {
+                    continue;
+                };
+                let change = match std::fs::read(&p) {
+                    Ok(bytes) if p.is_file() => {
+                        let hash = content_hash(&bytes);
+                        let text = (bytes.len() < 256 * 1024 && !bytes.contains(&0))
+                            .then(|| String::from_utf8_lossy(&bytes).into_owned());
+                        let mut c = cache.lock().expect("cache lock");
+                        let diff = match (&text, c.map.get(&p)) {
+                            (Some(new), Some(old)) if old != new => {
+                                Some(unified_diff(old, new, &rel))
+                            }
+                            (Some(_), Some(_)) => continue, // unchanged content
+                            _ => None,
+                        };
+                        if let Some(t) = text {
+                            c.put(p.clone(), t);
+                        }
+                        FileChange {
+                            project: project.clone(),
+                            path: rel,
+                            hash: Some(hash),
+                            diff,
+                        }
+                    }
+                    Ok(_) => continue,
+                    Err(_) if !p.exists() => FileChange {
+                        project: project.clone(),
+                        path: rel,
+                        hash: None,
+                        diff: None,
+                    },
+                    Err(_) => continue,
+                };
+                emit(change);
+            }
+        }
+    });
     w.watch(&root, RecursiveMode::Recursive)?;
     Ok(w)
 }
@@ -276,6 +296,46 @@ mod tests {
         let d = unified_diff(&old, &new, "f.txt");
         assert!(d.contains("-line 50") && d.contains("+line fifty"));
         assert!(d.len() < old.len() / 5);
+    }
+
+    #[test]
+    fn watcher_reports_final_content_after_truncate_then_write() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("b.txt");
+        std::fs::write(
+            &f, "old
+",
+        )
+        .unwrap();
+        let got: Arc<Mutex<Vec<FileChange>>> = Arc::new(Mutex::new(vec![]));
+        let g2 = got.clone();
+        let _w = watch(
+            "p".into(),
+            d.path(),
+            Arc::new(move |c| g2.lock().unwrap().push(c)),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        // An editor-style save: truncate, then write a moment later.
+        drop(std::fs::File::create(&f).unwrap());
+        std::thread::sleep(Duration::from_millis(5));
+        std::fs::write(
+            &f, "final
+",
+        )
+        .unwrap();
+        let want = content_hash(
+            b"final
+",
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if got.lock().unwrap().last().and_then(|c| c.hash.clone()) == Some(want.clone()) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("final content never reported: {:?}", got.lock().unwrap());
     }
 
     #[test]

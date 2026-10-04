@@ -82,12 +82,17 @@ async function step(name, fn) {
   catch (error) { results.push({ name, ok: false, error: String(error.message), ms: Date.now() - started }); console.log(`FAIL ${name}: ${error.message}`); }
 }
 async function connect() {
-  for (let tries = 0; tries < 120; tries++) {
+  // Cold CI runners can take well over 30 s to start WebView2 in a debug build.
+  for (let tries = 0; tries < 480; tries++) {
     if (app.exitCode !== null) throw new Error(`App exited: ${app.exitCode}`);
     try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`); break; }
     catch { await new Promise(resolve => setTimeout(resolve, 250)); }
   }
-  assert.ok(browser, 'WebView2 debugging endpoint did not open');
+  if (!browser) {
+    const logs = path.join(data, 'logs');
+    const tail = fs.existsSync(logs) ? fs.readdirSync(logs).map((f) => fs.readFileSync(path.join(logs, f), 'utf8')).join(' | ').slice(-2000) : 'no app log';
+    throw new Error(`WebView2 debugging endpoint did not open after 120 s. App log tail: ${tail}`);
+  }
   const page = browser.contexts()[0].pages()[0];
   await page.waitForFunction(() => !!window.__TAURI_INTERNALS__, null, { timeout: 30_000 });
   invoke = (command, args = {}) => page.evaluate(([command, args]) => window.__TAURI_INTERNALS__.invoke(command, args), [command, args]);
