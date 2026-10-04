@@ -161,9 +161,39 @@ pub async fn models(cli: Cli) -> Vec<String> {
             }
         }
         Cli::Claude => out.extend(["sonnet".into(), "opus".into()]),
-        Cli::Codex => {}
+        Cli::Codex => {
+            // Codex's own catalog for the signed-in account. Its configured
+            // default may not be allowed for the account, so list real models.
+            if let Ok(mut c) = command(cli, &["debug".into(), "models".into()]) {
+                if let Ok(Ok(o)) = tokio::time::timeout(Duration::from_secs(60), c.output()).await {
+                    let listed = parse_codex_models(&String::from_utf8_lossy(&o.stdout));
+                    if !listed.is_empty() {
+                        out = listed;
+                    }
+                }
+            }
+        }
     }
     out
+}
+
+/// Visible models from `codex debug models` (hidden/internal ones skipped).
+pub fn parse_codex_models(json: &str) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else {
+        return vec![];
+    };
+    v["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|m| m["visibility"] == "list" && m["supported_in_api"] != false)
+        .filter_map(|m| m["slug"].as_str())
+        .filter(|id| {
+            id.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-._".contains(c))
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn parse_agy_models(text: &str) -> Vec<String> {
@@ -444,6 +474,22 @@ impl Parser {
     }
 }
 
+/// Plan or rate limits reached: reported as 429 so Combos move on to the
+/// next provider instead of stopping.
+fn looks_rate_limited(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    [
+        "usage limit",
+        "rate limit",
+        "quota",
+        "too many requests",
+        "try again at",
+        "limit reached",
+    ]
+    .iter()
+    .any(|k| m.contains(k))
+}
+
 fn looks_signed_out(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
     [
@@ -691,7 +737,13 @@ async fn chat(
             }
             Err(e) if e == "cancelled" => {}
             Err(e) => {
-                let status = if looks_signed_out(&e) { 401 } else { 502 };
+                let status = if looks_rate_limited(&e) {
+                    429
+                } else if looks_signed_out(&e) {
+                    401
+                } else {
+                    502
+                };
                 let _ = tx
                     .send(frame(json!({"error":{"message":e,"status":status}})))
                     .await;
@@ -842,6 +894,24 @@ process.stdin.on('end', () => {
             matches!(err, conductor_core::Error::Provider { status: 401, .. }),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn codex_catalog_lists_visible_models_and_limits_map_to_429() {
+        let json = r#"{"models":[
+            {"slug":"gpt-6-astra","visibility":"list","supported_in_api":true},
+            {"slug":"gpt-reserve","visibility":"hide","supported_in_api":true},
+            {"slug":"gpt-5.6-luna","visibility":"list"},
+            {"slug":"bad slug","visibility":"list"}]}"#;
+        assert_eq!(
+            parse_codex_models(json),
+            vec!["gpt-6-astra", "gpt-5.6-luna"]
+        );
+        assert!(parse_codex_models("not json").is_empty());
+        assert!(looks_rate_limited(
+            "You've hit your usage limit. Upgrade to Pro or try again at 3:13 PM."
+        ));
+        assert!(!looks_rate_limited("Not logged in · Please run /login"));
     }
 
     #[test]
