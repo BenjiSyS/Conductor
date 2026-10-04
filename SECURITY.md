@@ -19,4 +19,4 @@ Include affected versions, exact reproduction steps, impact, platform, and redac
 - Themes are validated data; they cannot execute scripts or arbitrary CSS.
 - Logs, context, history and cached content are redacted and bounded. Detection cannot guarantee every unknown credential is found.
 
-See [the security model](docs/SECURITY_MODEL.md) and [verification record](docs/VERIFICATION.md). There is no released version with a completed security audit yet.
+See [the security model](docs/SECURITY_MODEL.md). There is no released version with a completed security audit yet.

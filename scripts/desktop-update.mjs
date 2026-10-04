@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { launch, stepper } from './lib/desktop.mjs';
 
-const exe = path.resolve(process.argv[2] ?? 'target/claude/debug/conductor-app.exe');
+const exe = path.resolve(process.argv[2] ?? 'target/debug/conductor-app.exe');
 const key = path.join(os.homedir(), '.conductor-release', 'updater.key');
 if (!fs.existsSync(key)) {
   console.log('skipped: no release signing key at', key);

@@ -11,7 +11,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { chromium } from '@playwright/test';
 
-const output = path.resolve('target/native-boundary-codex');
+const output = path.resolve('target/native-boundary');
 fs.mkdirSync(output, { recursive: true });
 const root = fs.mkdtempSync(path.join(output, 'run-'));
 const data = path.join(root, 'data');

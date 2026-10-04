@@ -13,4 +13,4 @@ Assets include user files, project decisions, provider credentials, remote devic
 | Poisoned update | Signature/checksum trust, downgrade policy, healthy activation and rollback | Interrupted update, bad signature, failed health and active-Goal safe boundary |
 | Lost user work | Checkpoints, conflict detection, atomic writes, no reset/discard | Interrupted write, competing changes, restore and migration tests |
 
-These are required defenses. Module presence and passing unit tests alone do not close their complete release gates. Follow docs/IMPLEMENTATION_AUDIT.md and docs/VERIFICATION.md.
+These are required defenses. Module presence and passing unit tests alone do not close their complete release gates.

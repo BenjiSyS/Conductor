@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Gauge, Plug, Settings, Palette, Download, Info, Bell, BellOff } from '@lucide/svelte';
+  import { Gauge, Plug, Settings, Palette, Download, Info, Bell, BellOff, Sun, Moon, Monitor } from '@lucide/svelte';
   import { app, attempt, savePrefs, type SettingsTab } from '../lib/app.svelte';
   import { call } from '../lib/api';
   import { keyLabel } from '../lib/format';
@@ -84,6 +84,15 @@
           {#if it.hint}<span class="kbd">{it.hint}</span>{/if}
         </button>
       {/each}
+      <div class="theme" role="group" aria-label="Theme">
+        {#each [['system', 'System', Monitor], ['light', 'Light', Sun], ['dark', 'Dark', Moon]] as const as [mode, label, Icon] (mode)}
+          <button
+            aria-pressed={(app.prefs?.theme_mode ?? 'system') === mode}
+            onclick={() => attempt(() => savePrefs({ theme_mode: mode }))}
+            title="{label} theme"><Icon size={14} /> {label}</button
+          >
+        {/each}
+      </div>
       <button
         role="menuitemcheckbox"
         aria-checked={app.prefs?.notify_done !== false}
@@ -199,6 +208,34 @@
     padding: 7px var(--s2);
     border-radius: var(--radius-sm);
     cursor: pointer;
+  }
+  .theme {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    padding: 3px;
+    margin: var(--s1) var(--s1);
+    background: var(--bg-sunken);
+    border-radius: var(--radius-sm);
+  }
+  .theme button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--fs-xs);
+    padding: 5px 4px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .theme button[aria-pressed='true'] {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
   }
   .item:hover,
   .item:focus-visible {

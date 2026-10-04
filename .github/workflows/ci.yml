@@ -40,7 +40,7 @@ jobs:
         if: failure() && runner.os == 'Windows'
         with:
           name: windows-native-failure-evidence
-          path: target/native-boundary-codex/results.json
+          path: target/native-boundary/results.json
   frontend:
     runs-on: ubuntu-24.04
     steps:
