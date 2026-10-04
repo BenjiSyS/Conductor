@@ -56,7 +56,9 @@ jobs:
         if: failure() && runner.os == 'Windows'
         with:
           name: windows-native-failure-evidence
-          path: target/native-boundary/results.json
+          path: |
+            target/native-boundary/results.json
+            target/native-boundary/app-*.log
   frontend:
     runs-on: ubuntu-24.04
     steps:

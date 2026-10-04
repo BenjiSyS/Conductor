@@ -212,6 +212,9 @@ fn plain(ids: impl IntoIterator<Item = String>) -> Vec<BridgeModel> {
         .collect()
 }
 
+/// Effort levels Claude Code accepts (`--effort`).
+const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
 /// Effort levels Grok Build accepts (`--effort`).
 const GROK_EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -230,7 +233,16 @@ pub async fn models(cli: Cli) -> Vec<BridgeModel> {
             }
         }
         // Aliases always point at the newest Sonnet / Opus.
-        Cli::Claude => out.extend(plain(["sonnet".to_string(), "opus".to_string()])),
+        Cli::Claude => {
+            let efforts: Vec<String> = CLAUDE_EFFORTS.iter().map(|e| e.to_string()).collect();
+            for m in out.iter_mut() {
+                m.efforts = efforts.clone();
+            }
+            out.extend(["sonnet", "opus"].map(|id| BridgeModel {
+                id: id.into(),
+                efforts: efforts.clone(),
+            }));
+        }
         // Grok Build has no model-list command; "default" follows the CLI's
         // own (newest) model, and the CLI accepts any API model id.
         Cli::Grok => {
@@ -453,11 +465,19 @@ pub fn invocation(
                 s("--include-partial-messages"),
                 s("--max-turns"),
                 s("1"),
-                s("--permission-mode"),
-                s("plan"),
+                // No tools and no MCP servers: a plain answer, nothing run.
+                s("--tools"),
+                s(""),
+                s("--strict-mcp-config"),
+                // Skip the user's Claude Code settings and hooks (sign-in is kept).
+                s("--setting-sources"),
+                s(""),
             ];
             if let Some(m) = model {
                 a.extend([s("--model"), m]);
+            }
+            if let Some(e) = effort.filter(|e| CLAUDE_EFFORTS.contains(&e.as_str())) {
+                a.extend([s("--effort"), e]);
             }
             (a, Some(prompt.into()))
         }
@@ -1327,7 +1347,10 @@ line",
         assert!(a.contains(&"read-only".to_string()) && !a.iter().any(|x| x.contains("quoted")));
         assert_eq!(stdin.as_deref(), Some("q \"quoted\" 100%"));
         let (a, stdin) = invocation(Cli::Claude, "opus", None, "q");
-        assert!(a.windows(2).any(|w| w == ["--permission-mode", "plan"]));
+        assert!(
+            a.windows(2).any(|w| w == ["--tools", ""])
+                && a.contains(&"--strict-mcp-config".to_string())
+        );
         assert!(a.windows(2).any(|w| w == ["--model", "opus"]));
         assert!(stdin.is_some());
         let (a, stdin) = invocation(Cli::Agy, "gemini-3.8-flash-low", Some("high"), "q");

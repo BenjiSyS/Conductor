@@ -44,9 +44,12 @@ const port = await new Promise((resolve, reject) => {
   const server = net.createServer(); server.on('error', reject);
   server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(() => resolve(port)); });
 });
+// The app's own stdout/stderr are kept for diagnosis when start-up fails.
+const appOut = path.join(output, 'app-stdout.log');
+const appErr = path.join(output, 'app-stderr.log');
 function launch() { return spawn(exe, [], {
-  env: { ...process.env, CONDUCTOR_DATA_DIR: data, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` },
-  stdio: 'ignore', windowsHide: true,
+  env: { ...process.env, CONDUCTOR_DATA_DIR: data, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+  stdio: ['ignore', fs.openSync(appOut, 'a'), fs.openSync(appErr, 'a')], windowsHide: true,
 }); }
 // cargo build's debug app uses the configured devUrl. CI has no Vite process;
 // serve the already-built frontend there without HMR/dependency reloads.
@@ -140,9 +143,17 @@ async function connect() {
     catch { await new Promise(resolve => setTimeout(resolve, 250)); }
   }
   if (!browser) {
+    const read = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').slice(-1500) : '');
     const logs = path.join(data, 'logs');
-    const tail = fs.existsSync(logs) ? fs.readdirSync(logs).map((f) => fs.readFileSync(path.join(logs, f), 'utf8')).join(' | ').slice(-2000) : 'no app log';
-    throw new Error(`WebView2 debugging endpoint did not open after 120 s. App log tail: ${tail}`);
+    const appLog = fs.existsSync(logs) ? fs.readdirSync(logs).map((f) => read(path.join(logs, f))).join(' | ') : 'no app log';
+    const listing = fs.existsSync(data) ? fs.readdirSync(data).join(', ') : 'data dir missing';
+    let webviews = 'unknown';
+    try {
+      webviews = String(execFileSync('tasklist', ['/FI', 'IMAGENAME eq msedgewebview2.exe', '/NH'], { encoding: 'utf8' }).split('\n').filter((l) => /msedgewebview2/i.test(l)).length);
+    } catch {}
+    throw new Error(
+      `WebView2 debugging endpoint did not open after 120 s. app alive: ${app.exitCode === null}; WebView2 processes: ${webviews}; data dir: [${listing}]; app log: ${appLog}; stderr: ${read(appErr)}; stdout: ${read(appOut)}`,
+    );
   }
   const page = browser.contexts()[0].pages()[0];
   await page.waitForFunction(() => !!window.__TAURI_INTERNALS__ && location.origin !== 'null', null, { timeout: 30_000 });
