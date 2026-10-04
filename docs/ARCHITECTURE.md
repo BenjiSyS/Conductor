@@ -28,8 +28,6 @@ Goals, task graphs and handoffs have provider-neutral formats. Completion uses c
 
 Files, issues, webpages and integrations are data. They cannot replace system invariants or user policy. Path guards and permission checks must run in Rust at the execution boundary; frontend visibility is not authorization.
 
-The local Laya service guides engineering model routing only. It is not part of Conductor's product authentication and does not replace deterministic evidence.
-
 ## Validation boundaries
 
-Tests exercise individual libraries and fixture protocols. Desktop runtime, real providers, remote network conditions, update activation and platform installers each need direct evidence. See [verification](VERIFICATION.md) and [implementation audit](IMPLEMENTATION_AUDIT.md).
+Tests exercise individual libraries and fixture protocols. Desktop runtime, real providers, remote network conditions, update activation and platform installers each need direct evidence.

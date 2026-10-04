@@ -325,6 +325,39 @@ test.describe('daily use', () => {
     await expect(page.getByRole('menu', { name: 'Profile' })).toBeHidden();
   });
 
+  test('dark and light mode switch from the profile menu and cover every screen', async ({ page }) => {
+    const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    const dark = async () => {
+      const [r, g, b] = (await bg()).match(/[0-9]+/g)!.map(Number);
+      return r + g + b < 200;
+    };
+    await page.getByRole('button', { name: 'Profile and settings' }).click();
+    const theme = page.getByRole('group', { name: 'Theme' });
+    await theme.getByRole('button', { name: /Dark/ }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect.poll(dark).toBe(true);
+    await page.screenshot({ path: `${shots}/28-dark-profile.png` });
+    await page.keyboard.press('Escape');
+    await page.getByLabel('Prompt').fill('Where is the entry point?');
+    await page.getByLabel('Prompt').press('Enter');
+    await expect(page.getByRole('button', { name: 'Send' })).toBeVisible({ timeout: 15_000 });
+    await page.screenshot({ path: `${shots}/29-dark-chat.png` });
+    await openSettings(page);
+    const s = page.getByRole('dialog', { name: 'Settings' });
+    for (const tab of ['Usage', 'Providers', 'Combos', 'Appearance']) {
+      await s.getByRole('navigation').getByRole('button', { name: tab, exact: true }).click();
+      await page.screenshot({ path: `${shots}/30-dark-${tab.toLowerCase()}.png` });
+    }
+    // The chosen mode persists in preferences and Light switches back.
+    await s.getByRole('navigation').getByRole('button', { name: 'Appearance', exact: true }).click();
+    await expect(s.getByRole('button', { name: 'Dark', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Profile and settings' }).click();
+    await page.getByRole('group', { name: 'Theme' }).getByRole('button', { name: /Light/ }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expect.poll(dark).toBe(false);
+  });
+
   test('full access is obvious and revocable', async ({ page }) => {
     await page.getByRole('button', { name: /^Permissions:/ }).click();
     await page.getByRole('radio', { name: /Full Access/ }).click();

@@ -6,4 +6,4 @@ An MCP installation must identify its source, dependencies, version, permissions
 
 MCP Doctor must distinguish missing dependency, configuration error, authentication, connection, running state, permissions and outdated/broken integrations. Fix, Reconnect, Update, Disable and Remove need action-specific results. A process spawning is not proof that MCP initialization or tool calls work.
 
-Verification requires a real initialization handshake, tools/list, at least one tool call, cancellation, broken server, missing dependency, malformed response and secure teardown. Record the exact integration and platform tested in docs/VERIFICATION.md.
+Verification requires a real initialization handshake, tools/list, at least one tool call, cancellation, broken server, missing dependency, malformed response and secure teardown.

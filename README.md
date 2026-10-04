@@ -4,7 +4,7 @@
 
 An open-source, local-first workspace for AI-assisted development. Choose a model or reusable Combo, work with a project, and keep context, permissions and verification visible. No Conductor account.
 
-**Development status:** Conductor is being built against the [full product specification](docs/CONDUCTOR_MASTER_BUILD_PROMPT.md). It is not yet a verified v1 release. The [implementation audit](docs/IMPLEMENTATION_AUDIT.md) preserves every requirement; the [verification record](docs/VERIFICATION.md) distinguishes passing checks from work still unverified.
+**Development status:** early releases. Builds are not code-signed yet, and some integrations are verified only on Windows so far — see [releases](docs/RELEASES.md).
 
 ## Download
 

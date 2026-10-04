@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { launch, stepper } from './lib/desktop.mjs';
 
-const exe = path.resolve(process.argv[2] ?? 'target/claude/debug/conductor-app.exe');
+const exe = path.resolve(process.argv[2] ?? 'target/debug/conductor-app.exe');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-connectors-'));
 const results = [];
 const step = stepper(results);

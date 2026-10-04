@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
 
-const exe = path.resolve(process.argv[2] ?? 'target/claude/debug/conductor-app.exe');
+const exe = path.resolve(process.argv[2] ?? 'target/debug/conductor-app.exe');
 const shots = path.resolve('target/screenshots');
 fs.mkdirSync(shots, { recursive: true });
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-smoke-'));

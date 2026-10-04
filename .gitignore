@@ -9,3 +9,11 @@ apps/desktop/src-tauri/gen/schemas/
 !.env.example
 /data/
 portable.flag
+
+# Local AI-assistant notes and build prompts (not part of the product)
+.ai/
+.claude/
+.codex/
+AGENTS.md
+CLAUDE.md
+docs/CONDUCTOR_MASTER_BUILD_PROMPT.md
