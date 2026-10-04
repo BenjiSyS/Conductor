@@ -234,7 +234,8 @@ test.describe('daily use', () => {
     const claudeBg = await bg();
     await tabs.getByRole('tab', { name: 'ChatGPT' }).click();
     await expect(panel).toHaveAttribute('data-brand', 'chatgpt');
-    expect(await bg()).not.toBe(claudeBg);
+    // The panel animates between themes; wait for the new colour.
+    await expect.poll(bg).not.toBe(claudeBg);
 
     // API rate limits come from the provider's last response.
     await expect(panel.getByText('487 of 500 left')).toBeVisible();

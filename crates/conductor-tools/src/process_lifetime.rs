@@ -386,7 +386,12 @@ mod platform {
                 }
                 if unsafe { libc::kill(-group, libc::SIGKILL) } == -1 {
                     let error = io::Error::last_os_error();
-                    if error.raw_os_error() != Some(libc::ESRCH) {
+                    // ESRCH: the group is gone. macOS also answers EPERM when
+                    // the only member left is our exited, unreaped leader
+                    // (a zombie), which likewise means nothing is left to stop.
+                    let gone = error.raw_os_error() == Some(libc::ESRCH)
+                        || (cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EPERM));
+                    if !gone {
                         return Err(error);
                     }
                 }
