@@ -166,7 +166,7 @@
       aria-label="Export MCP config"
     >
       <option value="">Export for…</option><option value="claude">Claude</option><option value="codex">Codex</option
-      ><option value="gemini">Gemini CLI</option>
+      ><option value="gemini">Gemini CLI</option><option value="grok">Grok Build</option>
     </select>
   </div>
   {#each servers as s (s.name)}

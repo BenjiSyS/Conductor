@@ -801,6 +801,7 @@ pub async fn mcp_export(state: State<'_, AppState>, target: String) -> CmdResult
         "claude" => serde_json::to_string_pretty(&cfg.to_claude_json()).map_err(err)?,
         "gemini" => serde_json::to_string_pretty(&cfg.to_gemini_json()).map_err(err)?,
         "codex" => cfg.to_codex_toml(),
+        "grok" => cfg.to_grok_toml(),
         _ => return Err("Unknown target".into()),
     })
 }

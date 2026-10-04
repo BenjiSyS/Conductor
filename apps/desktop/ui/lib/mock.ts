@@ -425,11 +425,18 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
               ]
             : c.base_url.includes('api.x.ai')
               ? [
-                  { id: 'grok-4', name: 'Grok 4', efforts: [], context_window: 256000, tools: true, vision: true },
                   {
-                    id: 'grok-4-fast',
-                    name: 'Grok 4 Fast',
-                    efforts: [],
+                    id: 'grok-4.7',
+                    name: 'Grok 4.7',
+                    efforts: ['low', 'medium', 'high', 'xhigh'],
+                    context_window: 2000000,
+                    tools: true,
+                    vision: true,
+                  },
+                  {
+                    id: 'grok-4.6',
+                    name: 'Grok 4.6',
+                    efforts: ['low', 'medium', 'high', 'xhigh'],
                     context_window: 2000000,
                     tools: true,
                     vision: true,
@@ -998,7 +1005,7 @@ const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
       tools: [],
       fix: { kind: m.enabled ? 'none' : 'enable' },
     })),
-  mcp_export: () => '{ "mcpServers": {} }',
+  mcp_export: (a) => (a.target === 'grok' || a.target === 'codex' ? '[mcp_servers]\n' : '{ "mcpServers": {} }'),
   secret_set: () => undefined,
   secret_delete: () => undefined,
   skills_list: () => [],
