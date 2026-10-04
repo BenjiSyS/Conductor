@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/conductor-core",
+    "crates/conductor-security",
+    "crates/conductor-context",
+    "crates/conductor-orchestrator",
+    "crates/conductor-tools",
+    "crates/conductor-remote",
+    "crates/conductor-engine",
+    "crates/conductor-cli",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/BenjiSyS/Conductor"
+rust-version = "1.85"
+
+[workspace.dependencies]
+conductor-core = { path = "crates/conductor-core" }
+conductor-security = { path = "crates/conductor-security" }
+conductor-providers = { path = "crates/conductor-providers" }
+conductor-context = { path = "crates/conductor-context" }
+conductor-orchestrator = { path = "crates/conductor-orchestrator" }
+conductor-tools = { path = "crates/conductor-tools" }
+conductor-remote = { path = "crates/conductor-remote" }
+conductor-engine = { path = "crates/conductor-engine" }
+
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+directories = "6"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+futures = "0.3"
+hex = "0.4"
+ignore = "0.4"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+similar = "2"
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+uuid = { version = "1", features = ["v4", "serde"] }
+which = "7"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = 3
+
+[profile.dev.package."*"]
+opt-level = 1

@@ -1,0 +1,136 @@
+/*
+ * Conductor design tokens.
+ * Typography scale: 12 / 13 / 14 (base) / 16 / 20 / 28.
+ * Spacing scale: 4px unit (--s1 … --s8).
+ * Radius: 6 / 10 / 14.  Motion: 120–200ms, one easing curve.
+ * Installed themes override these custom properties (see docs/THEMES.md).
+ */
+:root {
+  --font-ui:
+    'Inter', 'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', system-ui,
+    sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', Menlo, Consolas, ui-monospace, monospace;
+  --font-size: 14px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-xxl: 28px;
+  --lh: 1.55;
+
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s7: 32px;
+  --s8: 48px;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --border-width: 1px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --duration: 160ms;
+
+  --sidebar-w: 256px;
+  --content-w: 780px;
+
+  /* Light */
+  --bg: #fbfaf8;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #f3f2ef;
+  --surface: #ffffff;
+  --surface-hover: #f2f1ee;
+  --border: #e7e5e1;
+  --border-strong: #d6d3cd;
+  --text: #1b1c1f;
+  --text-muted: #63646b;
+  --text-faint: #96979d;
+  --accent: #4b5cf0;
+  --accent-text: #ffffff;
+  --accent-soft: #eceefe;
+  --success: #1f8a52;
+  --warning: #b86e00;
+  --danger: #c4322f;
+  --danger-soft: #fdeeed;
+  --focus: #4b5cf0;
+  --code-bg: #f4f3f0;
+  --code-text: #23242a;
+  --agent-running: #4b5cf0;
+  --agent-idle: #b9b8b3;
+  --shadow: 0 1px 2px rgb(20 20 25 / 6%), 0 8px 24px rgb(20 20 25 / 8%);
+  --shadow-lg: 0 2px 6px rgb(20 20 25 / 8%), 0 24px 64px rgb(20 20 25 / 18%);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #131417;
+    --bg-elevated: #1b1c20;
+    --bg-sunken: #0f1012;
+    --surface: #1b1c20;
+    --surface-hover: #24252a;
+    --border: #2a2b31;
+    --border-strong: #3a3b42;
+    --text: #ececef;
+    --text-muted: #a0a1a8;
+    --text-faint: #6c6d74;
+    --accent: #8fa4ff;
+    --accent-text: #10111a;
+    --accent-soft: #232845;
+    --success: #5cc48c;
+    --warning: #e2a64b;
+    --danger: #f07b75;
+    --danger-soft: #3a1f1f;
+    --focus: #8fa4ff;
+    --code-bg: #17181b;
+    --code-text: #e3e3e6;
+    --agent-running: #8fa4ff;
+    --agent-idle: #4a4b52;
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 30%);
+    --shadow-lg: 0 2px 6px rgb(0 0 0 / 35%), 0 24px 64px rgb(0 0 0 / 50%);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #131417;
+  --bg-elevated: #1b1c20;
+  --bg-sunken: #0f1012;
+  --surface: #1b1c20;
+  --surface-hover: #24252a;
+  --border: #2a2b31;
+  --border-strong: #3a3b42;
+  --text: #ececef;
+  --text-muted: #a0a1a8;
+  --text-faint: #6c6d74;
+  --accent: #8fa4ff;
+  --accent-text: #10111a;
+  --accent-soft: #232845;
+  --success: #5cc48c;
+  --warning: #e2a64b;
+  --danger: #f07b75;
+  --danger-soft: #3a1f1f;
+  --focus: #8fa4ff;
+  --code-bg: #17181b;
+  --code-text: #e3e3e6;
+  --agent-running: #8fa4ff;
+  --agent-idle: #4a4b52;
+  --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 30%);
+  --shadow-lg: 0 2px 6px rgb(0 0 0 / 35%), 0 24px 64px rgb(0 0 0 / 50%);
+  color-scheme: dark;
+}
+
+/* Potato profile and reduced motion: essentially no animation. */
+:root[data-motion='minimal'] {
+  --duration: 0ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration: 0ms;
+  }
+}

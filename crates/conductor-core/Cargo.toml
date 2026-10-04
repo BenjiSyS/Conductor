@@ -1,0 +1,32 @@
+[package]
+name = "conductor-core"
+description = "Core domain types, configuration, persistence and project model for Conductor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conductor-security.workspace = true
+chrono.workspace = true
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+sysinfo.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+regex.workspace = true
+rusqlite = { version = "0.37", features = ["bundled"] }
+futures-util = "0.3"
+url = "2"
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock = "0.6"

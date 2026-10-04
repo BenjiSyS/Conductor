@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conductor Host</title>
+<style>
+  :root { --bg:#f7f6f3; --surface:#fff; --text:#1d1d1f; --muted:#6e6e73; --border:#e5e3de; --accent:#3d5afe; --danger:#c62828; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141416; --surface:#1c1c1f; --text:#ececee; --muted:#9a9aa0; --border:#2c2c30; --accent:#8c9eff; --danger:#ef9a9a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:640px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:18px; font-weight:600; display:flex; align-items:center; gap:10px; margin:0 0 20px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:12px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:8px 0 4px; }
+  input { width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:transparent; color:inherit; font:inherit; }
+  button { margin-top:12px; padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; font-weight:500; cursor:pointer; }
+  #log { font:13px/1.45 ui-monospace,Consolas,monospace; white-space:pre-wrap; max-height:60vh; overflow:auto; }
+  .muted { color:var(--muted); font-size:13px; }
+  .err { color:var(--danger); }
+</style>
+</head>
+<body>
+<main>
+  <h1><svg width="22" height="22" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="26" fill="none" stroke="currentColor" stroke-width="5"/><path d="M20 40 L32 18 L44 40" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>Conductor Host</h1>
+  <div class="card" id="pairCard">
+    <p class="muted">Enter the pairing code shown on the host. Check that the certificate fingerprint your browser shows matches the host screen.</p>
+    <label for="code">Pairing code</label><input id="code" autocomplete="one-time-code" placeholder="ABCD-EFGH">
+    <label for="name">This device</label><input id="name" placeholder="My phone">
+    <button id="pair">Pair</button>
+    <p id="pairErr" class="err"></p>
+  </div>
+  <div class="card" id="liveCard" hidden>
+    <p class="muted" id="who"></p>
+    <div id="log" role="log" aria-live="polite"></div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let token = null;
+try { token = sessionStorage.getItem('conductor-token'); } catch {}
+async function pair() {
+  $('pairErr').textContent = '';
+  const r = await fetch('/api/pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: $('code').value, name: $('name').value || 'Browser' }) });
+  const v = await r.json().catch(() => ({}));
+  if (!r.ok) { $('pairErr').textContent = v.error || 'Pairing failed'; return; }
+  token = v.token;
+  try { sessionStorage.setItem('conductor-token', token); } catch {}
+  live();
+}
+function live() {
+  $('pairCard').hidden = true; $('liveCard').hidden = false;
+  const ws = new WebSocket(`wss://${location.host}/ws`);
+  ws.onopen = () => ws.send(JSON.stringify({ token }));
+  ws.onmessage = (e) => {
+    const v = JSON.parse(e.data);
+    if (v.type === 'hello') { $('who').textContent = `Connected as ${v.device}${v.can_control ? '' : ' (view only)'}`; return; }
+    if (v.type === 'revoked' || (v.type === 'error' && v.error === 'authentication failed')) { try { sessionStorage.removeItem('conductor-token'); } catch {} $('who').textContent = 'Access revoked.'; return; }
+    const line = document.createElement('div');
+    line.textContent = v.type === 'file_changed' ? `changed ${v.path}` : (v.text || v.message || JSON.stringify(v));
+    $('log').prepend(line);
+  };
+  ws.onclose = () => { $('who').textContent += ' — disconnected'; };
+}
+$('pair').onclick = pair;
+if (token) live();
+</script>
+</body>
+</html>

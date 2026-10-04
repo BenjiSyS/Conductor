@@ -1,0 +1,9 @@
+# cargo-audit configuration (CI runs `cargo audit --deny unsound`).
+[advisories]
+ignore = [
+  # glib 0.18 `VariantStrIter` unsoundness. glib is only pulled in by Tauri's
+  # Linux GTK/WebKit stack (tauri 2.12 pins gtk-rs 0.18, so no fixed glib is
+  # reachable). Conductor never calls glib Variant APIs. Remove once Tauri
+  # moves to gtk-rs >= 0.20.
+  "RUSTSEC-2024-0429",
+]

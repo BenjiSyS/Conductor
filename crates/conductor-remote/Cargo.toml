@@ -1,0 +1,33 @@
+[package]
+name = "conductor-remote"
+description = "Conductor Host: account-free, encrypted remote access with device pairing, scoped file sync and a real-time state channel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+base64.workspace = true
+conductor-security.workspace = true
+futures = "0.3"
+hex.workspace = true
+notify = "8"
+rand.workspace = true
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+reqwest.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+similar.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+tokio-tungstenite = "0.26"
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

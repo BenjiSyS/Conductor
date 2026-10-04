@@ -1,0 +1,42 @@
+{
+  "name": "conductor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings && vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build",
+    "format": "prettier --write \"apps/desktop/ui/**/*.{ts,svelte,css}\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"apps/desktop/ui/**/*.{ts,svelte,css}\" \"tests/**/*.ts\"",
+    "test:desktop": "node scripts/desktop-smoke.mjs && node scripts/desktop-lifecycle.mjs && node scripts/desktop-update.mjs && node scripts/desktop-usage.mjs",
+    "mock-llm": "node scripts/mock-llm.mjs"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.51.0",
+    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.13.1",
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@tauri-apps/cli": "^2.8.0",
+    "@types/node": "^22.20.5",
+    "prettier": "^3.6.0",
+    "prettier-plugin-svelte": "^3.4.0",
+    "svelte": "^5.57.1",
+    "svelte-check": "^4.7.6",
+    "typescript": "^5.9.0",
+    "vite": "^8.3.2",
+    "vitest": "^4.0.0"
+  }
+}

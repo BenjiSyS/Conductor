@@ -1,0 +1,24 @@
+[package]
+name = "conductor-tools"
+description = "Agent tools for Conductor: process execution, Git, checkpoints, MCP, skills, plugins, themes, Environment Doctor, Caveman, tunnels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conductor-context.workspace = true
+conductor-security.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "time", "sync", "macros", "rt", "fs"] }
+tokio-util.workspace = true
+toml.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+which.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["full"] }

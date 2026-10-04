@@ -1,0 +1,71 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Conductor",
+  "version": "0.1.0",
+  "identifier": "dev.benjisys.conductor",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Conductor",
+        "width": 1240,
+        "height": 820,
+        "minWidth": 720,
+        "minHeight": 520,
+        "center": true,
+        "visible": true,
+        "dragDropEnabled": false,
+        "create": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src ipc: http://ipc.localhost; font-src 'self' data:; object-src 'none'; frame-src http://127.0.0.1:* http://localhost:*; base-uri 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "publisher": "Conductor contributors",
+    "copyright": "MIT License",
+    "shortDescription": "Local-first AI orchestration",
+    "longDescription": "Conductor lets multiple AI providers and models work together on your goals while keeping you in control.",
+    "category": "DeveloperTool",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "displayLanguageSelector": false
+      }
+    },
+    "linux": {
+      "deb": {
+        "section": "devel"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVGQThEM0MzRjI5QzkwQkMKUldTOGtKenl3OU9vWDM5dGlGcEtDOXg1NFZRQm9vYk5hcllGcHRHRXl1ZXR3ZSs5Vk0xRDVNVGwK",
+      "endpoints": [
+        "https://github.com/BenjiSyS/Conductor/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
