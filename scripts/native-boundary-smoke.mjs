@@ -155,7 +155,9 @@ async function connect() {
       `WebView2 debugging endpoint did not open after 120 s. app alive: ${app.exitCode === null}; WebView2 processes: ${webviews}; data dir: [${listing}]; app log: ${appLog}; stderr: ${read(appErr)}; stdout: ${read(appOut)}`,
     );
   }
-  const page = browser.contexts()[0].pages()[0];
+  // The page may appear a moment after the debugging endpoint opens.
+  const context = browser.contexts()[0] ?? (await browser.waitForEvent('context'));
+  const page = context.pages()[0] ?? (await context.waitForEvent('page', { timeout: 60_000 }));
   await page.waitForFunction(() => !!window.__TAURI_INTERNALS__ && location.origin !== 'null', null, { timeout: 30_000 });
   invoke = (command, args = {}) => page.evaluate(([command, args]) => window.__TAURI_INTERNALS__.invoke(command, args), [command, args]);
 }

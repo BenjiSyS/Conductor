@@ -60,6 +60,12 @@ case "$(uname -s)" in
 esac
 
 echo "database created: $ok_db, still running: $alive, window: $window"
+# Builds before v0.3.0 can't open the debugging port on every Windows setup;
+# for those a missing window check is reported but doesn't fail.
+if [[ "$window" == fail && "${SMOKE_WINDOW:-required}" == optional ]]; then
+  echo "window check unavailable for this build (warning only)"
+  window=unverified
+fi
 if [[ "$ok_db" != 1 || "$alive" != 1 || "$window" == fail ]]; then
   echo "--- stderr ---"; tail -c 3000 "$data/stderr.log" || true
   echo "--- stdout ---"; tail -c 2000 "$data/stdout.log" || true
