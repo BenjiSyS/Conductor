@@ -1,0 +1,144 @@
+name: Verify release
+# Installs every published installer the way a user would and checks the
+# app really starts: it stays running, creates its local database and (on
+# Windows) loads its window. Runs after each Release, or manually for a tag.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to verify (e.g. v0.2.0)
+        required: true
+  # Changes to this check verify the newest published release.
+  pull_request:
+    paths: ['.github/workflows/verify-release.yml', 'scripts/release-smoke.sh']
+permissions:
+  contents: read
+env:
+  TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+  REPO: ${{ github.repository }}
+  BASE: https://github.com/${{ github.repository }}/releases/download
+jobs:
+  windows:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [nsis, msi]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ${{ matrix.package }} package
+        shell: pwsh
+        run: |
+          if (-not $env:TAG) { $env:TAG = (Invoke-RestMethod "https://api.github.com/repos/$env:REPO/releases?per_page=1")[0].tag_name; "TAG=$env:TAG" >> $env:GITHUB_ENV }
+          "Verifying $env:TAG"
+          $v = $env:TAG.TrimStart('v')
+          if ('${{ matrix.package }}' -eq 'nsis') {
+            Invoke-WebRequest "$env:BASE/$env:TAG/Conductor_${v}_x64-setup.exe" -OutFile setup.exe
+            Start-Process .\setup.exe -ArgumentList '/S', '/D=C:\ConductorTest' -Wait
+            "EXE=C:/ConductorTest/conductor-app.exe" >> $env:GITHUB_ENV
+          } else {
+            Invoke-WebRequest "$env:BASE/$env:TAG/Conductor_${v}_x64_en-US.msi" -OutFile conductor.msi
+            Start-Process msiexec -ArgumentList '/i', 'conductor.msi', '/qn', '/norestart' -Wait
+            $exe = Get-ChildItem 'C:\Program Files\Conductor', "$env:LOCALAPPDATA\Programs\Conductor" -Filter conductor-app.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            "EXE=$($exe.FullName -replace '\\','/')" >> $env:GITHUB_ENV
+          }
+      - name: WebView2 runtime
+        shell: pwsh
+        run: |
+          $k = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          if (-not (Test-Path $k)) {
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile wv2.exe
+            Start-Process .\wv2.exe -ArgumentList '/silent', '/install' -Wait
+          }
+      - name: Start the installed app
+        shell: bash
+        run: bash scripts/release-smoke.sh "$EXE"
+
+  macos:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, x64]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rosetta for the Intel build
+        if: matrix.arch == 'x64'
+        run: softwareupdate --install-rosetta --agree-to-license || true
+      - name: Install from the disk image
+        run: |
+          [ -n "$TAG" ] || TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"; echo "Verifying $TAG"
+          v="${TAG#v}"
+          curl -fsSL -o conductor.dmg "$BASE/$TAG/Conductor_${v}_${{ matrix.arch }}.dmg"
+          hdiutil attach -nobrowse -mountpoint /Volumes/conductor conductor.dmg
+          cp -R /Volumes/conductor/Conductor.app /Applications/
+          hdiutil detach /Volumes/conductor
+          xattr -cr /Applications/Conductor.app
+          file /Applications/Conductor.app/Contents/MacOS/*
+      - name: Start the installed app
+        run: bash scripts/release-smoke.sh "$(ls /Applications/Conductor.app/Contents/MacOS/* | head -1)"
+
+  linux:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04 (.deb)
+            image: ubuntu:24.04
+            kind: deb
+          - name: Debian 12 (.deb)
+            image: debian:12
+            kind: deb
+          - name: Kali rolling (.deb)
+            image: kalilinux/kali-rolling
+            kind: deb
+          - name: Fedora (.rpm)
+            image: fedora:latest
+            kind: rpm
+          - name: Ubuntu 22.04 (.AppImage)
+            image: ubuntu:22.04
+            kind: appimage
+          - name: Arch Linux (.AppImage)
+            image: archlinux:latest
+            kind: appimage
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - name: Tools
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates xvfb xauth git
+          elif command -v dnf >/dev/null; then
+            dnf install -y curl xorg-x11-server-Xvfb xorg-x11-xauth git which findutils procps-ng
+          else
+            pacman -Syu --noconfirm curl xorg-server-xvfb xorg-xauth git webkit2gtk-4.1 gtk3 libayatana-appindicator
+          fi
+      - uses: actions/checkout@v4
+      - name: Install the ${{ matrix.kind }} package
+        run: |
+          [ -n "$TAG" ] || TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"; echo "Verifying $TAG"
+          v="${TAG#v}"
+          case "${{ matrix.kind }}" in
+            deb)
+              curl -fsSL -o conductor.deb "$BASE/$TAG/Conductor_${v}_amd64.deb"
+              DEBIAN_FRONTEND=noninteractive apt-get install -y ./conductor.deb
+              echo "EXE=$(command -v conductor-app)" >> "$GITHUB_ENV" ;;
+            rpm)
+              curl -fsSL -o conductor.rpm "$BASE/$TAG/Conductor-${v}-1.x86_64.rpm"
+              dnf install -y ./conductor.rpm
+              echo "EXE=$(command -v conductor-app)" >> "$GITHUB_ENV" ;;
+            appimage)
+              curl -fsSL -o Conductor.AppImage "$BASE/$TAG/Conductor_${v}_amd64.AppImage"
+              chmod +x Conductor.AppImage
+              echo "EXE=$PWD/Conductor.AppImage" >> "$GITHUB_ENV"
+              echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV" ;;
+          esac
+      - name: Start the installed app
+        run: xvfb-run -a bash scripts/release-smoke.sh "$EXE"

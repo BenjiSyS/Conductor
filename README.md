@@ -12,20 +12,72 @@ Get the installer for your computer from the [latest release](https://github.com
 
 ## Build from source
 
-Requirements: Git, a current stable Rust toolchain, Node.js 22 or newer with npm, and the [Tauri desktop prerequisites](https://v2.tauri.app/start/prerequisites/). Windows needs the Visual Studio C++ build tools and WebView2. Linux needs WebKitGTK 4.1 and native development libraries. macOS needs Xcode command-line tools.
+You need Git, Node.js 22 or newer, Rust 1.85 or newer, and your system's desktop build tools. Install them once with the commands for your system, then build.
+
+### 1. Install the tools
+
+**Windows 10 / 11** (PowerShell):
+
+```powershell
+winget install Git.Git OpenJS.NodeJS.LTS Rustlang.Rustup
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+WebView2 is already part of Windows 10 and 11. If it's missing: `winget install Microsoft.EdgeWebView2Runtime`. Close and reopen the terminal afterwards so the new tools are on your PATH.
+
+**macOS**:
+
+```sh
+xcode-select --install
+brew install node
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+**Ubuntu, Debian, Kali, Mint, Pop!_OS**:
+
+```sh
+sudo apt update && sudo apt install -y git build-essential curl wget file pkg-config libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then install Node.js 22 or newer from [nodejs.org](https://nodejs.org) (the version in many distributions is too old).
+
+**Fedora**:
+
+```sh
+sudo dnf install -y git webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel libxdo-devel nodejs
+sudo dnf group install -y c-development
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+**Arch Linux**:
+
+```sh
+sudo pacman -S --needed git nodejs npm webkit2gtk-4.1 base-devel curl wget file openssl appmenu-gtk-module libappindicator-gtk3 librsvg xdotool rustup
+rustup default stable
+```
+
+### 2. Get the code and check your setup
 
 ```sh
 git clone https://github.com/BenjiSyS/Conductor.git
 cd Conductor
 npm ci
-npm run desktop
+npm run doctor
 ```
 
-Create an unsigned development package without updater signing keys:
+`npm run doctor` lists anything that's still missing and the exact command to install it.
+
+### 3. Run or build
 
 ```sh
-npx tauri build --config .github/unsigned-tauri.json -- --locked
+npm run desktop          # start the app in development mode
+npm run desktop:build    # build installers for this computer
 ```
+
+The first build takes 5–15 minutes. Installers are written to `target/release/bundle/` (`.exe`/`.msi` on Windows, `.dmg` on macOS, `.deb`/`.rpm`/`.AppImage` on Linux). These local builds aren't code-signed. `npm run desktop:release` makes the signed release build and needs the maintainers' updater signing key.
+
+To check that a build or an installed copy really starts, run `bash scripts/release-smoke.sh <path-to-conductor-app>` (on Linux under `xvfb-run` if there's no display).
 
 Run the headless CLI:
 
@@ -35,9 +87,7 @@ cargo run -p conductor-cli -- doctor
 cargo run -p conductor-cli -- context . "explain provider streaming" --json
 ```
 
-Production packaging uses `npm run desktop:build` and requires the configured updater signing key. OS signing and notarization require separate credentials. See [release gates](docs/RELEASES.md).
-
-The browser development server (`npm run dev`, http://127.0.0.1:1420) is for frontend development. Native project, credential and orchestration operations require the desktop application. Browser fixtures are not proof of native provider authentication.
+The browser development server (`npm run dev`, http://127.0.0.1:1420) is for frontend work only. It shows sample data; projects, credentials and models need the desktop app.
 
 ## First use
 

@@ -48,7 +48,7 @@ const port = await new Promise((resolve, reject) => {
 const appOut = path.join(output, 'app-stdout.log');
 const appErr = path.join(output, 'app-stderr.log');
 function launch() { return spawn(exe, [], {
-  env: { ...process.env, CONDUCTOR_DATA_DIR: data, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+  env: { ...process.env, CONDUCTOR_DATA_DIR: data, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, CONDUCTOR_DEVTOOLS_PORT: String(port), RUST_LOG: process.env.RUST_LOG ?? 'info' },
   stdio: ['ignore', fs.openSync(appOut, 'a'), fs.openSync(appErr, 'a')], windowsHide: true,
 }); }
 // cargo build's debug app uses the configured devUrl. CI has no Vite process;
