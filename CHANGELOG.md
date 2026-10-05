@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Installers for every system, each one installed and started by CI before it counts: Windows (x64 and ARM64) .exe/.msi, macOS (Apple Silicon and Intel) .dmg, Linux (x64 and ARM64) .deb, .rpm and .AppImage, tested on Ubuntu, Debian, Kali, Fedora and Arch.
+- Building from source works on a new computer: exact install commands per OS in the README and `npm run doctor`; `npm run desktop:build` needs no signing key.
+- Grok Build joins Codex CLI, Claude Code and Antigravity as a signed-in app (no API key), with Sign in buttons that open each provider's own sign-in page; Grok in Combos with effort levels; MCP export for Grok Build.
+- Newest models always: connected apps update themselves daily and model lists refresh automatically (e.g. GPT-6.1 Sol); effort levels for GPT-6, Grok and Claude models.
+- Fixes: Codex requests with an effort level on Windows, large pastes in /goal, Claude replies from the bridge.
+
 ## 0.2.0
 
 - Only Chat and Agent are modes; type `/goal` or `/plan` (or pick them from the `/` menu) to start a Goal or a Plan.
