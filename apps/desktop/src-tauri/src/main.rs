@@ -190,6 +190,16 @@ fn main() {
                     let dir = app.state::<AppState>().data_dir.join("webview");
                     wb = wb.data_directory(dir);
                 }
+                // Native tests: open the WebView2 debugging port through the
+                // webview's own options (some WebView2 installs ignore the
+                // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS variable). Keeps
+                // Tauri's default WebView2 feature flags.
+                #[cfg(windows)]
+                if let Some(port) = std::env::var("CONDUCTOR_DEVTOOLS_PORT").ok().and_then(|p| p.parse::<u16>().ok()) {
+                    wb = wb.additional_browser_args(&format!(
+                        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
+                    ));
+                }
                 wb.build()?;
             }
 

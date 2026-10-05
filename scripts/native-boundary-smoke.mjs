@@ -48,7 +48,7 @@ const port = await new Promise((resolve, reject) => {
 const appOut = path.join(output, 'app-stdout.log');
 const appErr = path.join(output, 'app-stderr.log');
 function launch() { return spawn(exe, [], {
-  env: { ...process.env, CONDUCTOR_DATA_DIR: data, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+  env: { ...process.env, CONDUCTOR_DATA_DIR: data, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, CONDUCTOR_DEVTOOLS_PORT: String(port), RUST_LOG: process.env.RUST_LOG ?? 'info' },
   stdio: ['ignore', fs.openSync(appOut, 'a'), fs.openSync(appErr, 'a')], windowsHide: true,
 }); }
 // cargo build's debug app uses the configured devUrl. CI has no Vite process;
@@ -155,7 +155,9 @@ async function connect() {
       `WebView2 debugging endpoint did not open after 120 s. app alive: ${app.exitCode === null}; WebView2 processes: ${webviews}; data dir: [${listing}]; app log: ${appLog}; stderr: ${read(appErr)}; stdout: ${read(appOut)}`,
     );
   }
-  const page = browser.contexts()[0].pages()[0];
+  // The page may appear a moment after the debugging endpoint opens.
+  const context = browser.contexts()[0] ?? (await browser.waitForEvent('context'));
+  const page = context.pages()[0] ?? (await context.waitForEvent('page', { timeout: 60_000 }));
   await page.waitForFunction(() => !!window.__TAURI_INTERNALS__ && location.origin !== 'null', null, { timeout: 30_000 });
   invoke = (command, args = {}) => page.evaluate(([command, args]) => window.__TAURI_INTERNALS__.invoke(command, args), [command, args]);
 }

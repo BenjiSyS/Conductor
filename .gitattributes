@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Shell scripts must keep LF line endings to run under bash on every OS.
+*.sh text eol=lf

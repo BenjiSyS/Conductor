@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
+import { ensureDevServer } from './lib/desktop.mjs';
 
 const exe = path.resolve(process.argv[2] ?? 'target/debug/conductor-app.exe');
 const shots = path.resolve('target/screenshots');
@@ -50,9 +51,10 @@ git('commit', '-m', 'init');
 const mock = spawn(process.execPath, ['scripts/mock-llm.mjs', '18080'], { stdio: 'pipe' });
 await new Promise((r) => mock.stdout.once('data', r));
 
+await ensureDevServer(exe);
 const started = Date.now();
 const app = spawn(exe, [], {
-  env: { ...process.env, CONDUCTOR_DATA_DIR: dataDir, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9333' },
+  env: { ...process.env, CONDUCTOR_DATA_DIR: dataDir, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9333', CONDUCTOR_DEVTOOLS_PORT: '9333' },
   stdio: 'ignore',
 });
 

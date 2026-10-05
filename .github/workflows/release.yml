@@ -2,9 +2,9 @@ name: Release
 # Builds installers for every desktop OS and attaches them to a GitHub
 # release. Run by pushing a tag like v0.1.0, or manually for an existing tag.
 #
-#   Windows 10/11 (x64)        .msi and setup .exe
+#   Windows 10/11 (x64, ARM64) .msi and setup .exe
 #   macOS (Apple Silicon, Intel) .dmg
-#   Linux (x64)                .deb (Debian, Ubuntu, Kali, Mint, Pop!_OS)
+#   Linux (x64, ARM64)         .deb (Debian, Ubuntu, Kali, Mint, Pop!_OS)
 #                              .rpm (Fedora, RHEL, openSUSE)
 #                              .AppImage (any distribution, incl. Arch)
 #
@@ -39,6 +39,13 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             bundles: dmg
+          # ARM: Windows on ARM laptops and 64-bit ARM Linux.
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bundles: msi,nsis
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -74,11 +81,13 @@ jobs:
             | Your computer | Download |
             |---|---|
             | Windows 10 or 11 | `Conductor_*_x64-setup.exe` (or the `.msi`) |
+            | Windows on ARM | `Conductor_*_arm64-setup.exe` |
             | Mac with Apple Silicon (M1–M4) | `Conductor_*_aarch64.dmg` |
             | Mac with Intel | `Conductor_*_x64.dmg` |
-            | Ubuntu, Debian, Kali, Mint | `conductor_*_amd64.deb` |
-            | Fedora, RHEL, openSUSE | `conductor-*.x86_64.rpm` |
-            | Any other Linux (Arch, …) | `conductor_*_amd64.AppImage` |
+            | Ubuntu, Debian, Kali, Mint | `Conductor_*_amd64.deb` |
+            | Fedora, RHEL, openSUSE | `Conductor-*-1.x86_64.rpm` |
+            | Any other Linux (Arch, …) | `Conductor_*_amd64.AppImage` |
+            | Linux on ARM (64-bit) | `Conductor_*_arm64.deb`, `Conductor-*-1.aarch64.rpm` or `Conductor_*_aarch64.AppImage` |
 
             These builds aren't code-signed yet. Windows may show "Windows protected your PC" (choose More info → Run anyway); on macOS, right-click the app and choose Open the first time.
           releaseDraft: false

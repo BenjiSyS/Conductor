@@ -25,12 +25,25 @@ export async function startMock(port, env = {}) {
   return p;
 }
 
+// Debug builds load the UI from the Vite dev server on port 1420. Start it
+// when nothing is serving there, so tests work without manual setup.
+let devServer = null;
+export async function ensureDevServer(exe) {
+  if (!/[\\/]debug[\\/]/.test(exe)) return; // release builds bundle the UI
+  const up = () => fetch('http://localhost:1420').then((r) => r.ok, () => false);
+  if (await up()) return;
+  devServer = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '1420', '--strictPort'], { stdio: 'ignore' });
+  process.on('exit', () => devServer?.kill());
+  for (let i = 0; i < 60 && !(await up()); i++) await new Promise((r) => setTimeout(r, 500));
+}
+
 let cdpPort = 9400;
 /** Launch the app with an isolated data dir; returns { proc, browser, page, invoke }. */
 export async function launch(exe, dataDir) {
+  await ensureDevServer(exe);
   const port = cdpPort++;
   const proc = spawn(exe, [], {
-    env: { ...process.env, CONDUCTOR_DATA_DIR: dataDir, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` },
+    env: { ...process.env, CONDUCTOR_DATA_DIR: dataDir, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, CONDUCTOR_DEVTOOLS_PORT: String(port) },
     stdio: 'ignore',
   });
   let browser;

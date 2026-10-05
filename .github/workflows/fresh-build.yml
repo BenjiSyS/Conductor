@@ -1,0 +1,97 @@
+name: Build from README
+# Follows the README's "Build from source" steps on clean systems, then
+# starts the app that was built. Proves a new computer can build Conductor.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 5 * * 1'
+  pull_request:
+    paths: ['README.md', 'scripts/doctor.mjs', 'scripts/release-smoke.sh', 'package.json', '.github/workflows/fresh-build.yml']
+permissions:
+  contents: read
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04
+            image: ubuntu:24.04
+            family: debian
+          - name: Kali rolling
+            image: kalilinux/kali-rolling
+            family: debian
+          - name: Fedora
+            image: fedora:latest
+            family: fedora
+          - name: Arch Linux
+            image: archlinux:latest
+            family: arch
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+      CI: 'true'
+    steps:
+      - name: Step 1 — install the tools (commands from the README)
+        run: |
+          case "${{ matrix.family }}" in
+            debian)
+              apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential curl wget file pkg-config libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev xz-utils xvfb xauth
+              # README: Node.js 22+ from nodejs.org
+              curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt -o sums.txt
+              tarball=$(grep -o 'node-v[0-9.]*-linux-x64.tar.xz' sums.txt | head -1)
+              curl -fsSLO "https://nodejs.org/dist/latest-v22.x/$tarball"
+              tar -xJf "$tarball" -C /usr/local --strip-components=1 ;;
+            fedora)
+              dnf install -y git webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel libxdo-devel nodejs
+              dnf group install -y c-development
+              dnf install -y xorg-x11-server-Xvfb xorg-x11-xauth rpm-build ;;
+            arch)
+              pacman -Syu --noconfirm --needed git nodejs npm webkit2gtk-4.1 base-devel curl wget file openssl appmenu-gtk-module libappindicator-gtk3 librsvg xdotool rustup xorg-server-xvfb xorg-xauth
+              rustup default stable ;;
+          esac
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Step 2 — get the code and check the setup
+        run: |
+          git clone --depth 1 --branch "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}" "https://github.com/${GITHUB_REPOSITORY}.git" Conductor
+          cd Conductor
+          npm ci
+          npm run doctor
+      - name: Step 3 — build the installers
+        run: |
+          cd Conductor
+          npm run desktop:build
+          ls -la target/release/bundle/*/
+      - name: Start the app that was built
+        run: cd Conductor && xvfb-run -a bash scripts/release-smoke.sh target/release/conductor-app
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Step 2 — install packages and check the setup
+        run: |
+          npm ci
+          npm run doctor
+      - name: Step 3 — build the installers
+        run: npm run desktop:build
+      - name: Start the app that was built
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then exe=target/release/conductor-app.exe
+          else exe="$(ls -d target/release/bundle/macos/*.app)/Contents/MacOS/conductor-app"; fi
+          bash scripts/release-smoke.sh "$exe"
